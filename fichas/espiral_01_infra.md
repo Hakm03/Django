@@ -7,9 +7,9 @@
 | **Número de espiral** | 1 |
 | **Nombre del ciclo** | Infraestructura y Configuración Base |
 | **Semanas** | W01 – W03 |
-| **Fecha de inicio** | ___/___/_____ |
-| **Fecha de cierre** | ___/___/_____ |
-| **Responsable** | [Nombre del estudiante] |
+| **Fecha de inicio** | 09/10/2026 |
+| **Fecha de cierre** | 10/10/2026 |
+| **Responsable** | [Tadeo Haim Estrella Mejia] |
 | **Asesor** | MC. Román Fernando López González |
 
 ---
@@ -56,11 +56,11 @@ posterior tenga una URL pública verificable desde el inicio del proyecto.
 
 | Criterio | ¿Cumplido? | Evidencia |
 |---|---|---|
-| `manage.py check --deploy` sin warnings críticos | ✅ / ❌ | Captura de terminal |
-| URL pública `https://…onrender.com/` → HTTP 200 | ✅ / ❌ | Captura del navegador |
-| Repositorio con ≥ 6 commits en rama `main` | ✅ / ❌ | `git log --oneline` |
-| 33 tests pasando (W01 + W02 + W03) | ✅ / ❌ | Resultado pytest |
-| Ficha Schmelkes E1 completa | ✅ / ❌ | Este documento |
+| `manage.py check --deploy` sin warnings críticos | ✅ /  | Captura de terminal |
+| URL pública `https://…onrender.com/` → HTTP 200 | ✅ /  | Captura del navegador |
+| Repositorio con ≥ 6 commits en rama `main` | ✅ /  | `git log --oneline` |
+| 33 tests pasando (W01 + W02 + W03) | ✅ /  | Resultado pytest |
+| Ficha Schmelkes E1 completa | ✅ /  | Este documento |
 
 ---
 
