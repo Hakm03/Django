@@ -28,13 +28,13 @@ cobertura de pruebas ≥ 15 tests de modelo.
 |---|---|---|---|
 | 1 | Diseño diagrama ER (8 entidades) | ✅ W04 | h:mm |
 | 2 | Normalización 3FN y decisiones de diseño | ✅ W04 | h:mm |
-| 3 | Aprobación del asesor | ⏳ W04 | — |
-| 4 | Implementar models.py × 5 apps | ⏳ W05 | — |
-| 5 | Ejecutar makemigrations + migrate | ⏳ W05 | — |
-| 6 | Registrar en admin.py | ⏳ W05 | — |
-| 7 | Agregar validators | ⏳ W06 | — |
-| 8 | Suite de ≥ 15 tests de modelo | ⏳ W06 | — |
-| 9 | Instalar django-jazzmin | ⏳ W06 | — |
+| 3 | Aprobación del asesor | ✅ W04 | — |
+| 4 | Implementar models.py × 5 apps | ✅ W05 | — |
+| 5 | Ejecutar makemigrations + migrate | ✅ W05 | — |
+| 6 | Registrar en admin.py | ✅ W05 | — |
+| 7 | Agregar validators | ✅ W06 | — |
+| 8 | Suite de ≥ 15 tests de modelo | ✅ W06 | — |
+| 9 | Instalar django-jazzmin | ✅ W06 | — |
 
 ---
 
