@@ -31,12 +31,12 @@ panel admin funcional y una suite de ≥ 15 pruebas de modelo pasando.
 
 | Tarea | Semana | Estado |
 |---|---|---|
-| Diseñar diagrama ER (8 entidades) | W04 | ⏳ |
-| Normalizar a 3FN y documentar decisiones | W04 | ⏳ |
-| Obtener aprobación del asesor | W04 | ⏳ |
-| Implementar models.py × 5 apps | W05 | ⏳ |
-| Ejecutar makemigrations + migrate | W05 | ⏳ |
-| Registrar modelos en admin.py | W05 | ⏳ |
+| Diseñar diagrama ER (8 entidades) | W04 | ✅ |
+| Normalizar a 3FN y documentar decisiones | W04 | ✅ |
+| Obtener aprobación del asesor | W04 | ✅ |
+| Implementar models.py × 5 apps | W05 | ✅ |
+| Ejecutar makemigrations + migrate | W05 | ✅ |
+| Registrar modelos en admin.py | W05 | ✅ |
 | Agregar validators a campos críticos | W06 | ⏳ |
 | Escribir tests/test_models.py (≥ 15 tests) | W06 | ⏳ |
 | Instalar y configurar django-jazzmin | W06 | ⏳ |

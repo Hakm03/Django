@@ -13,7 +13,7 @@ y repositorio en GitHub con al menos 10 commits.
 | HU-E1-01 | Entorno portable USB | 3 | ✅|
 | HU-E1-02 | Scripts de sincronización | 2 | ✅|
 | HU-E1-03 | Repositorio en GitHub | 2 | ✅|
-| HU-E1-04 | Despliegue en Render.com | 3 | ⏳ Pendiente |
+| HU-E1-04 | Despliegue en Render.com | 3 | ✅ Pendiente |
 
 **Total de puntos del sprint:** 10
 
