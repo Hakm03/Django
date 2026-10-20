@@ -53,12 +53,12 @@ cobertura de pruebas ≥ 15 tests de modelo.
 
 | Criterio | Estado | Evidencia |
 |---|---|---|
-| Diagrama ER aprobado por el asesor | ⏳ | Firma en ficha |
-| `showmigrations` → `[X] 0001_initial` en 5 apps | ⏳ | Terminal |
-| `/admin/` muestra las 8 entidades | ⏳ | Captura |
-| ≥ 15 tests de modelo PASSED | ⏳ | pytest output |
-| Precio negativo → ValidationError | ⏳ | Test específico |
-| Correo duplicado → IntegrityError | ⏳ | Test específico |
+| Diagrama ER aprobado por el asesor | ✅ | Firma en ficha |
+| `showmigrations` → `[X] 0001_initial` en 5 apps | ✅ | Terminal |
+| `/admin/` muestra las 8 entidades | ✅ | Captura |
+| ≥ 15 tests de modelo PASSED | ✅ | pytest output |
+| Precio negativo → ValidationError | ✅ | Test específico |
+| Correo duplicado → IntegrityError | ✅ | Test específico |
 
 ---
 
