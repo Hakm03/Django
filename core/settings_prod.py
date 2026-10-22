@@ -60,6 +60,7 @@ SECURE_REFERRER_POLICY         = 'same-origin'
 # ── ARCHIVOS ESTÁTICOS ─────────────────────────────────────────────────────
 # WhiteNoise ya configurado en settings.py; solo confirmar almacenamiento
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+WHITENOISE_MANIFEST_STRICT = False
 
 # ── LOGGING: solo WARNING y superiores en producción ──────────────────────
 LOGGING = {
