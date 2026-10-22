@@ -1,18 +1,6 @@
-"""Suite de pruebas W08 — Vistas de escritura: Create, Update, Delete.
-
-Verifica: redirección sin auth, GET con auth, POST válido,
-          POST inválido, borrado con redirect.
-
-Ejecutar con:
-    python manage.py test tests.test_w08_escritura --verbosity=2
-
-Resultado esperado:
-    Ran 12 tests in X.XXXs
-    OK
-"""
 from decimal import Decimal
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Permission, User
 from django.test import Client, TestCase
 from django.urls import reverse
 
@@ -22,6 +10,17 @@ from proveedores.models import Proveedor
 from ventas.models      import Venta
 
 
+def _dar_permisos(user, app_label, *codenames):
+    """Asigna permisos concretos a un usuario de prueba."""
+    perms = Permission.objects.filter(
+        content_type__app_label=app_label,
+        codename__in=codenames,
+    )
+    assert perms.count() == len(codenames), (
+        f"Faltan permisos en {app_label}: {codenames}"
+    )
+    user.user_permissions.add(*perms)
+
 class ProductoEscrituraTest(TestCase):
     """Tests de CreateView, UpdateView y DeleteView de Producto."""
 
@@ -29,6 +28,7 @@ class ProductoEscrituraTest(TestCase):
         self.user = User.objects.create_user(
             'testuser', password='testpass123'
         )
+        _dar_permisos(self.user, 'productos', 'delete_producto')   # ← AQUÍ
         self.cat  = Categoria.objects.create(nombre='Cat Test')
         self.prod = Producto.objects.create(
             nombre='Laptop', precio=Decimal('10000.00'),
@@ -167,6 +167,7 @@ class VentaEscrituraTest(TestCase):
 
     def setUp(self):
         self.user = User.objects.create_user('userV', password='pass')
+        _dar_permisos(self.user, 'ventas', 'add_venta')            # ← AQUÍ
         cat       = Categoria.objects.create(nombre='Cat')
         self.prod = Producto.objects.create(
             nombre='P', precio=Decimal('100.00'), stock=5, categoria=cat
