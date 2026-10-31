@@ -23,21 +23,20 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'django.contrib.sites',        # ← requerido por allauth
-    # Terceros
-    'allauth',                     # ← nuevo
-    'allauth.account',             # ← nuevo
-    'allauth.socialaccount',       # ← nuevo (para OAuth futuro)
+    'django.contrib.sites',        # requerido por allauth
+    'allauth',
+    'allauth.account',
+    'allauth.socialaccount',
     'rest_framework',
+    'rest_framework.authtoken',    # ← agrega
     'whitenoise.runserver_nostatic',
-    # Apps del ERP
     'clientes',
     'proveedores',
     'productos',
     'ventas',
     'reportes',
     'configuracion',
-    'core'
+    'core',                        # necesario para el comando crear_grupos
 ]
 
 
@@ -50,7 +49,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'allauth.account.middleware.AccountMiddleware',   # ← agregar al final
+    'allauth.account.middleware.AccountMiddleware',   # requerido por allauth
 ]
 
 ROOT_URLCONF = 'core.urls'
@@ -104,11 +103,20 @@ LOGIN_REDIRECT_URL  = '/productos/'
 LOGOUT_REDIRECT_URL = '/'
 
 # ── DRF ──────────────────────────────────────────────────────────────────
+# core/settings.py — reemplazar la configuración REST_FRAMEWORK de W01:
 REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.SessionAuthentication',   # para el navegador
+        'rest_framework.authentication.TokenAuthentication',     # para clientes externos
+    ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticatedOrReadOnly',
     ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 20,
 }
+
+
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
@@ -211,7 +219,6 @@ JAZZMIN_UI_TWEAKS = {
     },
 }
 
-# ── DJANGO SITES (requerido por allauth) ──────────────────────────────────
 SITE_ID = 1
 
 # ── AUTHENTICATION BACKENDS ───────────────────────────────────────────────
@@ -222,9 +229,8 @@ AUTHENTICATION_BACKENDS = [
     'allauth.account.auth_backends.AuthenticationBackend',
 ]
 
-# ── ALLAUTH: configuración para desarrollo académico ──────────────────────
 ACCOUNT_LOGIN_METHODS          = {'username'}   # login por username
-ACCOUNT_EMAIL_REQUIRED         = False          # no obligar correo
+ACCOUNT_SIGNUP_FIELDS          = ['username*', 'password1*', 'password2*']   # correo no obligatorio
 ACCOUNT_EMAIL_VERIFICATION     = 'none'         # no enviar email de verificación
 ACCOUNT_LOGOUT_ON_GET          = True           # logout sin confirmar (dev)
 ACCOUNT_SESSION_REMEMBER       = True           # recordar sesión

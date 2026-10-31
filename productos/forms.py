@@ -15,7 +15,7 @@ class ProductoForm(forms.ModelForm):
     class Meta:
         model  = Producto
         fields = ['nombre', 'precio', 'stock', 'categoria',
-                  'proveedor', 'activo']
+                  'proveedor', 'activo', 'imagen']
         widgets = {
             'nombre':    forms.TextInput(
                 attrs={'class': 'erp-input',
@@ -27,12 +27,13 @@ class ProductoForm(forms.ModelForm):
             'stock':     forms.NumberInput(
                 attrs={'class': 'erp-input', 'min': '0'}
             ),
-            'categoria': forms.Select(
-                attrs={'class': 'erp-input'}
+            'categoria': forms.Select(attrs={'class': 'erp-input'}),
+            'proveedor': forms.Select(attrs={'class': 'erp-input'}),
+            'imagen':    forms.ClearableFileInput(
+                attrs={'class': 'erp-input',
+                       'accept': 'image/jpeg,image/png,image/webp'}
             ),
-            'proveedor': forms.Select(
-                attrs={'class': 'erp-input'}
-            ),
+
         }
         labels = {
             'nombre':    'Nombre',
@@ -41,4 +42,5 @@ class ProductoForm(forms.ModelForm):
             'categoria': 'Categoría',
             'proveedor': 'Proveedor',
             'activo':    'Activo',
+            'imagen':    'Imagen del producto',
         }

@@ -87,10 +87,11 @@ class ProductoEscrituraTest(TestCase):
         }
         r = self.client.post(reverse('productos:crear'), datos)
         self.assertEqual(r.status_code, 200)
-        self.assertFormError(r, 'form', 'precio', [
-    'Asegúrese de que este valor sea mayor o igual a 0.00.',
-    'El precio no puede ser negativo. Valor recibido: -100.00',
-])
+        form = r.context['form']
+        self.assertFormError(form, 'precio', [
+            'Asegúrese de que este valor sea mayor o igual a 0.00.',
+            'El precio no puede ser negativo. Valor recibido: -100.00',
+        ])
     def test_delete_elimina_producto(self):
         """POST /productos/<id>/eliminar/ → borra el producto y redirige."""
         self.client.force_login(self.user)

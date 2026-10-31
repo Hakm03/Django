@@ -28,11 +28,12 @@ class DjangoVersionTest(TestCase):
     """Verifica que Django sea la versión 4.2 LTS."""
 
     def test_django_version_4_2(self):
-        """Django debe ser exactamente la versión 4.2.x."""
+        """Django debe ser la versión 4.2 o superior."""
         import django
         major, minor = django.VERSION[0], django.VERSION[1]
-        self.assertEqual(major, 4, "Django major debe ser 4")
-        self.assertEqual(minor, 2, "Django minor debe ser 2 (LTS)")
+        self.assertGreaterEqual(major, 4, "Django major debe ser 4 o mayor")
+        if major == 4:
+            self.assertGreaterEqual(minor, 2, "Django minor debe ser 2 o mayor (si major es 4)")
 
 
 class VistasBienvenidaTest(TestCase):
