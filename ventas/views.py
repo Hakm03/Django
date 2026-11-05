@@ -5,8 +5,14 @@ Lectura: VentaListView y VentaDetailView.
 Escritura (crear_venta): W08.
 """
 # ventas/views.py — agregar imports al inicio:
+import logging
+
 from django.conf import settings
 from django.contrib import messages
+from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
+from django.template.loader import render_to_string
+from django.utils import timezone
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import redirect, render
 from django.urls import reverse_lazy
@@ -101,4 +107,50 @@ class VentaDeleteView(LoginRequiredMixin, PermissionRequiredMixin, DeleteView):
         response = super().form_valid(form)
         messages.success(self.request, f'Venta #{pk} eliminada.')
         return response
+
+
+# ── W12: factura en PDF (WeasyPrint) ──────────────────────────────────────
+logger = logging.getLogger(__name__)
+
+
+def _fetcher_seguro(url):
+    """Envoltorio delgado: la lógica vive en core.pdf_utils."""
+    from core.pdf_utils import fetcher_seguro
+    return fetcher_seguro(url)
+
+
+def _generar_pdf(html: str) -> bytes:
+    """Envoltorio delgado: la lógica vive en core.pdf_utils."""
+    from core.pdf_utils import generar_pdf
+    return generar_pdf(html)
+
+
+@login_required
+def venta_pdf(request, venta_id):
+    """Descarga la factura de una venta en PDF."""
+    venta = get_object_or_404(
+        Venta.objects
+        .select_related('cliente')
+        .prefetch_related('detalles__producto'),
+        pk=venta_id,
+    )
+    html = render_to_string(
+        'ventas/factura_pdf.html',
+        {'venta': venta, 'emitida': timezone.now()},
+    )
+    try:
+        pdf = _generar_pdf(html)
+    except (ImportError, OSError):
+        logger.exception('WeasyPrint no está disponible en este servidor')
+        return HttpResponse(
+            'El generador de PDF no está disponible en este servidor.',
+            status=503,
+            content_type='text/plain; charset=utf-8',
+        )
+
+    respuesta = HttpResponse(pdf, content_type='application/pdf')
+    respuesta['Content-Disposition'] = (
+        f'attachment; filename="factura_{venta.pk:05d}.pdf"'
+    )
+    return respuesta
 

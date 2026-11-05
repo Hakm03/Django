@@ -5,9 +5,13 @@ ListView y DetailView con select_related y paginación.
 Escritura (Create/Update/Delete) se implementa en W08.
 """
 import csv
+import logging
 from datetime import date
+from decimal import Decimal
 
 from django.contrib.auth.decorators import login_required
+from django.template.loader import render_to_string
+from django.utils import timezone
 from django.http import HttpResponse, HttpResponseBadRequest
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -145,7 +149,9 @@ class ProductoDeleteView(LoginRequiredMixin, PermissionRequiredMixin, DeleteView
 
 
 # ── W12: exportar inventario (Excel / CSV) ────────────────────────────────
-FORMATOS_INVENTARIO = {'xlsx', 'csv'}  # lista permitida del parámetro ?formato=
+FORMATOS_INVENTARIO = {'xlsx', 'csv', 'pdf'}  # lista permitida de ?formato=
+MAX_PRODUCTOS_PDF = 1000  # límite del PDF para no agotar la memoria
+logger = logging.getLogger(__name__)
 
 ENCABEZADOS_INVENTARIO = ['ID', 'Producto', 'Categoría', 'Proveedor',
                           'Precio', 'Stock', 'Valor en inventario', 'Activo']
@@ -261,17 +267,53 @@ def _respuesta_csv():
     return respuesta
 
 
+def _respuesta_pdf():
+    """Construye la descarga del inventario en PDF (WeasyPrint)."""
+    productos_qs = _productos_inventario()
+    if productos_qs.count() > MAX_PRODUCTOS_PDF:
+        return HttpResponseBadRequest(
+            f'Hay demasiados productos para un PDF (máximo '
+            f'{MAX_PRODUCTOS_PDF}). Usa Excel o CSV.',
+            content_type='text/plain; charset=utf-8',
+        )
+    productos = list(productos_qs)
+    for p in productos:
+        p.valor = p.precio * p.stock
+    html = render_to_string('productos/inventario_pdf.html', {
+        'productos': productos,
+        'total': sum((p.valor for p in productos), Decimal('0')),
+        'emitida': timezone.now(),
+    })
+    try:
+        from core.pdf_utils import generar_pdf  # import perezoso
+        pdf = generar_pdf(html)
+    except (ImportError, OSError):
+        logger.exception('WeasyPrint no está disponible en este servidor')
+        return HttpResponse(
+            'El generador de PDF no está disponible en este servidor.',
+            status=503,
+            content_type='text/plain; charset=utf-8',
+        )
+    respuesta = HttpResponse(pdf, content_type='application/pdf')
+    respuesta['Content-Disposition'] = (
+        f'attachment; filename="inventario_{date.today():%Y-%m-%d}.pdf"'
+    )
+    return respuesta
+
+
 @login_required
 def exportar_inventario(request):
-    """Descarga el inventario en el formato elegido (?formato=xlsx|csv)."""
+    """Descarga el inventario en el formato elegido (?formato=xlsx|csv|pdf)."""
     formato = request.GET.get('formato', 'xlsx').strip().lower()
     if formato not in FORMATOS_INVENTARIO:
         return HttpResponseBadRequest(
-            'Formato no válido. Formatos permitidos: xlsx, csv.',
+            'Formato no válido. Formatos permitidos: xlsx, csv, pdf.',
             content_type='text/plain; charset=utf-8',
         )
     if formato == 'csv':
         return _respuesta_csv()
+    if formato == 'pdf':
+        return _respuesta_pdf()
     return _respuesta_xlsx()
 
 

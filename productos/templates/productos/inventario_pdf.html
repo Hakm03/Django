@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Inventario {{ emitida|date:"Y-m-d" }}</title>
+<style>
+    @page {
+        size: A4;
+        margin: 2.2cm 1.8cm;
+        @bottom-center {
+            content: "Página " counter(page) " de " counter(pages);
+            font-size: 9pt; color: #666;
+        }
+    }
+    body { font-family: "Liberation Sans", "DejaVu Sans", sans-serif;
+           font-size: 9.5pt; color: #222; }
+    .encabezado { border-bottom: 3px solid #1F3A5F; padding-bottom: 10px;
+                  margin-bottom: 18px; }
+    h1 { margin: 0; color: #1F3A5F; font-size: 22pt; }
+    .sub { color: #666; font-size: 10pt; margin-top: 4px; }
+    table { width: 100%; border-collapse: collapse; }
+    thead { display: table-header-group; }
+    th { background: #1F3A5F; color: #fff; padding: 6px; text-align: left; }
+    td { padding: 6px; border-bottom: 1px solid #ddd; }
+    tr { page-break-inside: avoid; }
+    .der { text-align: right; }
+    .total td { border-top: 2px solid #1F3A5F; border-bottom: none;
+                font-weight: bold; font-size: 11pt; }
+    .pie { margin-top: 30px; color: #666; font-size: 9pt; }
+</style>
+</head>
+<body>
+    <div class="encabezado">
+        <h1>INVENTARIO</h1>
+        <div class="sub">ERP Django · UTEC Celaya · {{ productos|length }} producto(s)</div>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Producto</th>
+                <th>Categoría</th>
+                <th>Proveedor</th>
+                <th class="der">Precio</th>
+                <th class="der">Stock</th>
+                <th class="der">Valor</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in productos %}
+            <tr>
+                <td>{{ p.nombre }}</td>
+                <td>{{ p.categoria.nombre }}</td>
+                <td>{% if p.proveedor %}{{ p.proveedor.nombre }}{% else %}—{% endif %}</td>
+                <td class="der">${{ p.precio|floatformat:2 }}</td>
+                <td class="der">{{ p.stock }}</td>
+                <td class="der">${{ p.valor|floatformat:2 }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6">No hay productos en el inventario.</td></tr>
+            {% endfor %}
+            <tr class="total">
+                <td colspan="5" class="der">TOTAL</td>
+                <td class="der">${{ total|floatformat:2 }}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <p class="pie">Documento generado el {{ emitida|date:"d/m/Y H:i" }}.</p>
+</body>
+</html>

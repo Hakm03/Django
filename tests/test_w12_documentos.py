@@ -3,18 +3,34 @@
 Ejecutar con:
     python manage.py test tests.test_w12_documentos --verbosity=2
 
-Las pruebas del PDF (factura e inventario) se agregan en la Fase 2.
+Las pruebas del PDF real solo corren donde WeasyPrint funciona (Docker/Linux).
+En Windows sin Docker se omiten (skip) y el resto pasa normal.
 """
 import csv
 from decimal import Decimal
 from io import BytesIO, StringIO
+from unittest import skipUnless
+from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.test import TestCase
 from django.urls import reverse
 from openpyxl import load_workbook
 
+from clientes.models import Cliente
 from productos.models import Categoria, Producto
+from ventas.models import DetalleVenta, Venta
+
+
+def _hay_weasyprint() -> bool:
+    try:
+        import weasyprint  # noqa: F401
+        return True
+    except (ImportError, OSError):
+        return False
+
+
+HAY_WEASYPRINT = _hay_weasyprint()
 
 
 class ExportarExcelTest(TestCase):
@@ -178,3 +194,103 @@ class ExportarInventarioTest(TestCase):
             r = self.client.get(self.url, {'formato': formato})
             self.assertEqual(r.status_code, 400, formato)
             self.assertIn('Formato no válido', r.content.decode('utf-8'))
+
+
+class InventarioPDFTest(TestCase):
+    """GET /productos/exportar/?formato=pdf"""
+
+    def setUp(self):
+        self.user = User.objects.create_user('invpdf_user', password='pass')
+        cat = Categoria.objects.create(nombre='Cómputo')
+        Producto.objects.create(
+            nombre='Teclado', precio=Decimal('450.00'), stock=10, categoria=cat)
+        self.url = reverse('productos:exportar')
+
+    def test_sin_login_redirige_a_login(self):
+        r = self.client.get(self.url, {'formato': 'pdf'})
+        self.assertEqual(r.status_code, 302)
+        self.assertIn('/accounts/login/', r['Location'])
+
+    def test_sin_weasyprint_responde_503(self):
+        self.client.login(username='invpdf_user', password='pass')
+        with patch('core.pdf_utils.generar_pdf', side_effect=OSError('sin pango')):
+            with self.assertLogs('productos.views', level='ERROR'):
+                r = self.client.get(self.url, {'formato': 'pdf'})
+        self.assertEqual(r.status_code, 503)
+
+    def test_demasiados_productos_devuelve_400(self):
+        self.client.login(username='invpdf_user', password='pass')
+        with patch('productos.views.MAX_PRODUCTOS_PDF', 1):
+            Producto.objects.create(
+                nombre='Otro', precio=Decimal('1.00'), stock=1,
+                categoria=Categoria.objects.first())
+            r = self.client.get(self.url, {'formato': 'pdf'})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('demasiados', r.content.decode('utf-8'))
+
+    @skipUnless(HAY_WEASYPRINT, 'WeasyPrint no disponible (usar Docker)')
+    def test_pdf_valido_y_attachment(self):
+        self.client.login(username='invpdf_user', password='pass')
+        r = self.client.get(self.url, {'formato': 'pdf'})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r['Content-Type'], 'application/pdf')
+        self.assertTrue(r.content.startswith(b'%PDF'))
+        self.assertIn('attachment', r['Content-Disposition'])
+        self.assertIn('.pdf', r['Content-Disposition'])
+
+
+class VentaPDFTest(TestCase):
+    """GET /ventas/<id>/pdf/"""
+
+    def setUp(self):
+        self.user = User.objects.create_user('pdf_user', password='pass')
+        cat = Categoria.objects.create(nombre='Cat PDF')
+        prod = Producto.objects.create(
+            nombre='Mouse', precio=Decimal('150.00'), stock=5, categoria=cat)
+        cli = Cliente.objects.create(
+            nombre='Cliente PDF', correo='pdf@test.com', telefono='4611234567')
+        self.venta = Venta.objects.create(cliente=cli)
+        DetalleVenta.objects.create(
+            venta=self.venta, producto=prod, cantidad=2,
+            precio_unitario=Decimal('150.00'))
+        self.url = reverse('ventas:pdf', args=[self.venta.pk])
+
+    def test_sin_login_redirige_a_login(self):
+        r = self.client.get(self.url)
+        self.assertEqual(r.status_code, 302)
+        self.assertIn('/accounts/login/', r['Location'])
+
+    def test_venta_inexistente_devuelve_404(self):
+        self.client.login(username='pdf_user', password='pass')
+        r = self.client.get(reverse('ventas:pdf', args=[99999]))
+        self.assertEqual(r.status_code, 404)
+
+    def test_sin_weasyprint_responde_503_y_no_se_cae(self):
+        """Si faltan las librerías del PDF, el ERP debe seguir vivo."""
+        self.client.login(username='pdf_user', password='pass')
+        with patch('ventas.views._generar_pdf', side_effect=OSError('sin pango')):
+            with self.assertLogs('ventas.views', level='ERROR'):
+                r = self.client.get(self.url)
+        self.assertEqual(r.status_code, 503)
+
+    @skipUnless(HAY_WEASYPRINT, 'WeasyPrint no disponible (usar Docker)')
+    def test_con_login_devuelve_pdf_valido(self):
+        self.client.login(username='pdf_user', password='pass')
+        r = self.client.get(self.url)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r['Content-Type'], 'application/pdf')
+        self.assertTrue(r.content.startswith(b'%PDF'))
+        self.assertGreater(len(r.content), 1000)
+
+    @skipUnless(HAY_WEASYPRINT, 'WeasyPrint no disponible (usar Docker)')
+    def test_pdf_se_descarga_como_archivo(self):
+        self.client.login(username='pdf_user', password='pass')
+        r = self.client.get(self.url)
+        self.assertIn('attachment', r['Content-Disposition'])
+        self.assertIn('.pdf', r['Content-Disposition'])
+
+    @skipUnless(HAY_WEASYPRINT, 'WeasyPrint no disponible (usar Docker)')
+    def test_pdf_bloquea_direcciones_de_internet(self):
+        from ventas.views import _fetcher_seguro
+        with self.assertRaises(ValueError):
+            _fetcher_seguro('http://example.com/logo.png')
