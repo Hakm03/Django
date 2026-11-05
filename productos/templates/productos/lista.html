@@ -9,6 +9,14 @@
         {{ page_obj.paginator.count }} producto(s)
     </span>
     {% if user.is_authenticated %}
+        <form method="get" action="{% url 'productos:exportar' %}"
+              style="display:flex;gap:.4rem;align-items:center;">
+            <select name="formato" aria-label="Formato de exportación">
+                <option value="xlsx">Excel (.xlsx)</option>
+                <option value="csv">CSV (.csv)</option>
+            </select>
+            <button type="submit" class="btn-erp-primary">⬇ Exportar</button>
+        </form>
         <a href="{% url 'productos:crear' %}" class="btn-erp-gold">
             + Nuevo producto
         </a>

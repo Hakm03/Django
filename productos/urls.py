@@ -23,4 +23,11 @@ urlpatterns = [
     path('<int:producto_id>/eliminar/',
          views.ProductoDeleteView.as_view(),
          name='eliminar'),
+    # Exportación del inventario (W12)
+    path('exportar/',
+         views.exportar_inventario,
+         name='exportar'),
+    path('exportar-excel/',
+         views.exportar_excel,
+         name='exportar_excel'),
 ]
