@@ -13,3 +13,5 @@ media/
 *.md
 .vscode/
 tests/
+*.bak
+*.sqlite3*

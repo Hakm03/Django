@@ -1,0 +1,15 @@
+# Evita que Windows convierta estos archivos a CRLF (Linux no los entiende así)
+* text=auto
+*.sh             text eol=lf
+Dockerfile       text eol=lf
+*.yml            text eol=lf
+*.yaml           text eol=lf
+requirements.txt text eol=lf
+# Archivos binarios: no tocar
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.webp binary
+*.pdf  binary
+*.xlsx binary
+*.sqlite3 binary

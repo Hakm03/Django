@@ -1,12 +1,8 @@
-# docker-compose.yml
-# Uso: docker-compose up --build
-# Requiere Docker Desktop instalado en la PC
-
-version: '3.9'
-
+# docker-compose.yml — ERP en tu PC: base de datos + aplicación
+# Uso:  docker compose up --build
+# Las contraseñas de este archivo son SOLO de práctica local; nunca van en Render.
 services:
 
-  # ── Base de datos PostgreSQL ────────────────────────────────────────
   db:
     image: postgres:15-alpine
     restart: unless-stopped
@@ -22,23 +18,12 @@ services:
       test: ["CMD-SHELL", "pg_isready -U erp_user -d erp_db"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
-  # ── Cache Redis (preparado para Celery en W16) ─────────────────────
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-
-  # ── Aplicación Django ───────────────────────────────────────────────
   web:
     build: .
+    entrypoint: ["sh", "/app/docker-entrypoint.sh"]
     restart: unless-stopped
-    command: >
-      sh -c "python manage.py migrate &&
-             python manage.py collectstatic --no-input &&
-             gunicorn core.wsgi --bind 0.0.0.0:8000 --workers 2 --log-file -"
     volumes:
       - .:/app
       - static_volume:/app/staticfiles
@@ -49,12 +34,14 @@ services:
       db:
         condition: service_healthy
     environment:
-      DJANGO_SETTINGS_MODULE: core.settings_prod
-      SECRET_KEY:             dev-clave-docker-no-usar-en-produccion
-      DEBUG:                  "False"
-      DATABASE_URL:           postgres://erp_user:erp_pass_local@db:5432/erp_db
-      REDIS_URL:              redis://redis:6379/0
-      ALLOWED_HOSTS:          localhost,127.0.0.1
+      DJANGO_SETTINGS_MODULE:     core.settings_prod
+      MODO_LOCAL:                 "True"
+      SECRET_KEY:                 dev-clave-docker-no-usar-en-produccion
+      DATABASE_URL:               postgres://erp_user:erp_pass_local@db:5432/erp_db
+      ALLOWED_HOSTS:              localhost,127.0.0.1
+      DJANGO_SUPERUSER_USERNAME:  admin
+      DJANGO_SUPERUSER_EMAIL:     admin@erp.local
+      DJANGO_SUPERUSER_PASSWORD:  admin-local-123
 
 volumes:
   postgres_data:

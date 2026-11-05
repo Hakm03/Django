@@ -23,6 +23,11 @@ import dj_database_url
 DEBUG = False
 SECRET_KEY = os.environ['SECRET_KEY']   # falla intencionalmente si no existe
 
+# ── MODO LOCAL (solo para probar con Docker en tu PC) ──────────────────────────────────────
+# En Render esta variable NO existe, así que producción siempre queda con
+# todos los candados puestos (HTTPS obligatorio, cookies seguras, etc.).
+MODO_LOCAL = os.environ.get('MODO_LOCAL', 'False').lower() == 'true'
+
 # ── HOSTS PERMITIDOS ────────────────────────────────────────────────────────
 # Render inyecta RENDER_EXTERNAL_HOSTNAME automáticamente
 _render_host = os.environ.get('RENDER_EXTERNAL_HOSTNAME', '')
@@ -37,7 +42,7 @@ DATABASES = {
     'default': dj_database_url.config(
         conn_max_age=600,          # conexiones persistentes 10 min
         conn_health_checks=True,   # verifica conexión antes de usarla
-        ssl_require=True,          # Render requiere SSL en PostgreSQL
+        ssl_require=not MODO_LOCAL,   # Render exige SSL; el Postgres local no lo tiene
     )
 }
 
@@ -49,12 +54,12 @@ if _render_host:
 # ── HEADERS HTTP SEGUROS ───────────────────────────────────────────────────
 # Render termina HTTPS en su proxy: sin esto SECURE_SSL_REDIRECT causa bucle infinito
 SECURE_PROXY_SSL_HEADER        = ('HTTP_X_FORWARDED_PROTO', 'https')
-SECURE_SSL_REDIRECT            = True
-SECURE_HSTS_SECONDS            = 31536000    # 1 año
-SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-SECURE_HSTS_PRELOAD            = True
-SESSION_COOKIE_SECURE          = True
-CSRF_COOKIE_SECURE             = True
+SECURE_SSL_REDIRECT            = not MODO_LOCAL
+SECURE_HSTS_SECONDS            = 0 if MODO_LOCAL else 31536000    # 1 año
+SECURE_HSTS_INCLUDE_SUBDOMAINS = not MODO_LOCAL
+SECURE_HSTS_PRELOAD            = not MODO_LOCAL
+SESSION_COOKIE_SECURE          = not MODO_LOCAL
+CSRF_COOKIE_SECURE             = not MODO_LOCAL
 X_FRAME_OPTIONS                = 'DENY'
 SECURE_CONTENT_TYPE_NOSNIFF    = True
 SECURE_REFERRER_POLICY         = 'same-origin'

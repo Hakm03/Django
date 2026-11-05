@@ -1,39 +1,41 @@
-# Dockerfile
-# Imagen base: Python 3.11 mínima (slim = sin paquetes innecesarios)
-FROM python:3.11-slim
+# Dockerfile — imagen del ERP con WeasyPrint (PDF)
+FROM python:3.11-slim-bookworm
 
-# Variables de entorno para Python en contenedor
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PORT=8000
+    PYTHONUNBUFFERED=1
 
-# Directorio de trabajo dentro del contenedor
+# Programas de Linux que WeasyPrint necesita para dibujar el PDF
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libpangocairo-1.0-0 \
+    libcairo2 \
+    libcairo-gobject2 \
+    libgdk-pixbuf-2.0-0 \
+    libffi-dev \
+    shared-mime-info \
+    fonts-liberation \
+    fonts-dejavu-core \
+    libjpeg62-turbo-dev \
+    libpng-dev \
+    libwebp-dev \
+    zlib1g-dev \
+    libpq-dev \
+    gcc \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Instalar dependencias del sistema necesarias para psycopg2
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copiar e instalar dependencias Python primero (aprovecha caché de Docker)
+# Primero solo requirements.txt: así Docker reutiliza esta capa si no cambió
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+ && pip install --no-cache-dir -r requirements.txt
 
-# Copiar el código fuente
+# Después el código del proyecto
 COPY . .
 
-# Recolectar archivos estáticos durante el build
-RUN python manage.py collectstatic --no-input \
-    --settings=core.settings \
-    || echo "collectstatic con settings base"
+# Seguro extra: quita saltos de línea de Windows (CRLF) del script de arranque
+RUN sed -i 's/\r$//' docker-entrypoint.sh && chmod +x docker-entrypoint.sh
 
-# Exponer el puerto
-EXPOSE $PORT
-
-# Comando por defecto: iniciar Gunicorn
-CMD gunicorn core.wsgi \
-    --bind 0.0.0.0:$PORT \
-    --workers 2 \
-    --timeout 120 \
-    --log-file -
+EXPOSE 8000
+ENTRYPOINT ["./docker-entrypoint.sh"]
