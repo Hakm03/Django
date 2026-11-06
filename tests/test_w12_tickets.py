@@ -195,3 +195,51 @@ class TicketsLoteTest(TicketBaseTest):
         r = self.client.get(reverse('ventas:lista'))
         self.assertNotContains(r, 'name="ids"')
         self.assertNotContains(r, 'id="btn-imprimir"')
+
+
+class InventarioImprimirTest(TestCase):
+    """GET /productos/imprimir/"""
+
+    def setUp(self):
+        self.user = User.objects.create_user('inv_print', password='pass')
+        cat = Categoria.objects.create(nombre='Cat Imp')
+        Producto.objects.create(
+            nombre='Teclado', precio=Decimal('450.00'), stock=10,
+            categoria=cat)                                   # valor 4500.00
+        Producto.objects.create(
+            nombre='<b>Raro</b>', precio=Decimal('10.00'), stock=3,
+            categoria=cat)                                   # valor 30.00
+        self.url = reverse('productos:imprimir')
+
+    def test_sin_login_redirige_a_login(self):
+        r = self.client.get(self.url)
+        self.assertEqual(r.status_code, 302)
+        self.assertIn('/accounts/login/', r['Location'])
+
+    def test_con_login_200_total_y_texto_escapado(self):
+        self.client.login(username='inv_print', password='pass')
+        r = self.client.get(self.url)
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'Teclado')
+        self.assertContains(r, '4530.00')
+        self.assertNotContains(r, '<b>Raro</b>')
+        self.assertContains(r, 'size: A4')
+
+    def test_papel_carta_y_papel_invalido(self):
+        self.client.login(username='inv_print', password='pass')
+        self.assertContains(self.client.get(self.url, {'papel': 'carta'}),
+                            'size: letter')
+        self.assertEqual(
+            self.client.get(self.url, {'papel': 'x; }'}).status_code, 400)
+
+    def test_demasiados_productos_400(self):
+        self.client.login(username='inv_print', password='pass')
+        with patch('productos.views.MAX_PRODUCTOS_PDF', 1):
+            r = self.client.get(self.url)
+        self.assertEqual(r.status_code, 400)
+
+    def test_lista_de_productos_tiene_el_boton(self):
+        self.client.login(username='inv_print', password='pass')
+        r = self.client.get(reverse('productos:lista'))
+        self.assertContains(r, self.url)
+        self.assertContains(r, reverse('productos:exportar'))  # sigue ahí

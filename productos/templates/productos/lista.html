@@ -18,6 +18,8 @@
             </select>
             <button type="submit" class="btn-erp-primary">⬇ Exportar</button>
         </form>
+        <a href="{% url 'productos:imprimir' %}" target="_blank" rel="noopener"
+           class="btn-erp-primary">🖨 Vista previa / Imprimir</a>
         <a href="{% url 'productos:crear' %}" class="btn-erp-gold">
             + Nuevo producto
         </a>

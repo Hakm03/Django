@@ -321,3 +321,43 @@ def exportar_inventario(request):
 def exportar_excel(request):
     """Descarga el inventario completo en .xlsx (ruta anterior, siempre Excel)."""
     return _respuesta_xlsx()
+
+
+# ── W12 (ampliación): vista previa e impresión del inventario ─────────────
+PAPELES_INVENTARIO = {
+    'a4':    {'etiqueta': 'Hoja A4',    'pagina': 'A4'},
+    'carta': {'etiqueta': 'Hoja Carta', 'pagina': 'letter'},
+}
+
+
+@login_required
+def inventario_imprimir(request):
+    """Vista previa del inventario con botón Imprimir (?papel=a4|carta)."""
+    from django.shortcuts import render
+
+    papel = request.GET.get('papel', 'a4').strip().lower()
+    if papel not in PAPELES_INVENTARIO:
+        return HttpResponseBadRequest(
+            'Papel no válido. Permitidos: a4, carta.',
+            content_type='text/plain; charset=utf-8',
+        )
+    productos_qs = _productos_inventario()
+    if productos_qs.count() > MAX_PRODUCTOS_PDF:
+        return HttpResponseBadRequest(
+            f'Hay demasiados productos para imprimir (máximo '
+            f'{MAX_PRODUCTOS_PDF}). Usa Excel o CSV.',
+            content_type='text/plain; charset=utf-8',
+        )
+    productos = list(productos_qs)
+    for p in productos:
+        p.valor = p.precio * p.stock
+    from configuracion.models import ConfiguracionERP
+    return render(request, 'productos/inventario_imprimir.html', {
+        'productos': productos,
+        'total': sum((p.valor for p in productos), Decimal('0')),
+        'emitida': timezone.now(),
+        'empresa': ConfiguracionERP.get_instance(),
+        'papel': papel,
+        'papel_info': PAPELES_INVENTARIO[papel],
+        'papeles': list(PAPELES_INVENTARIO.items()),
+    })

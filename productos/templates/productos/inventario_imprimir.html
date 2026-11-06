@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventario — vista previa</title>
+<style>
+    @page { size: {{ papel_info.pagina }}; margin: 15mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Liberation Sans", "DejaVu Sans", Arial, sans-serif;
+           font-size: 10pt; color: #000; background: #e6e6e6; }
+
+    .barra { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap;
+             gap: .5rem; align-items: center; padding: .6rem 1rem;
+             background: #222; color: #fff; font-size: 14px; }
+    .barra form { display: flex; gap: .5rem; align-items: center; margin: 0; }
+    .barra select, .barra button { font: inherit; padding: .35rem .7rem;
+             border-radius: 4px; border: 1px solid #888; }
+    .barra button { background: #fff; color: #000; cursor: pointer; }
+    .barra button.principal { background: #0b5; border-color: #0b5; color: #fff; font-weight: 700; }
+    .barra .espacio { flex: 1; }
+
+    .pagina { max-width: 210mm; margin: 1rem auto 2rem; padding: 12mm;
+              background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.3); }
+    h1 { margin: 0; font-size: 16pt; }
+    .sub { color: #333; font-size: 9pt; margin: 2px 0 10px; }
+    table { width: 100%; border-collapse: collapse; }
+    thead { display: table-header-group; }   /* el encabezado se repite en cada hoja */
+    th { text-align: left; border-bottom: 2px solid #000; padding: 4px; font-size: 9pt; }
+    td { padding: 4px; border-bottom: 1px solid #bbb; vertical-align: top; }
+    tr { page-break-inside: avoid; }
+    .der { text-align: right; white-space: nowrap; }
+    tfoot td { border-top: 2px solid #000; border-bottom: 0; font-weight: 700; }
+
+    @media print {
+        body { background: #fff; }
+        .barra { display: none !important; }
+        .pagina { max-width: none; margin: 0; padding: 0; box-shadow: none; }
+    }
+</style>
+</head>
+<body>
+<div class="barra">
+    <strong>Vista previa del inventario</strong>
+    <form method="get" action="{% url 'productos:imprimir' %}">
+        <label for="papel">Papel:</label>
+        <select name="papel" id="papel" onchange="this.form.submit()">
+            {% for clave, info in papeles %}
+            <option value="{{ clave }}"{% if clave == papel %} selected{% endif %}>{{ info.etiqueta }}</option>
+            {% endfor %}
+        </select>
+        <noscript><button type="submit">Aplicar</button></noscript>
+    </form>
+    <span class="espacio"></span>
+    <button type="button" class="principal" onclick="window.print()">🖨 Imprimir</button>
+    <button type="button" onclick="window.close()">Cerrar</button>
+</div>
+
+<main class="pagina">
+    <h1>Inventario de productos</h1>
+    <div class="sub">{{ empresa.nombre_empresa }} · {{ emitida|date:"d/m/Y H:i" }} · {{ productos|length }} producto(s)</div>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th><th>Producto</th><th>Categoría</th><th>Proveedor</th>
+                <th class="der">Precio</th><th class="der">Stock</th><th class="der">Valor</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in productos %}
+            <tr>
+                <td>{{ p.pk }}</td>
+                <td>{{ p.nombre }}</td>
+                <td>{{ p.categoria }}</td>
+                <td>{{ p.proveedor|default:"—" }}</td>
+                <td class="der">${{ p.precio }}</td>
+                <td class="der">{{ p.stock }}</td>
+                <td class="der">${{ p.valor }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="7">No hay productos registrados.</td></tr>
+            {% endfor %}
+        </tbody>
+        <tfoot>
+            <tr><td colspan="6" class="der">TOTAL EN INVENTARIO</td><td class="der">${{ total }}</td></tr>
+        </tfoot>
+    </table>
+</main>
+</body>
+</html>

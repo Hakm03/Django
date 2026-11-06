@@ -27,6 +27,10 @@ urlpatterns = [
     path('exportar/',
          views.exportar_inventario,
          name='exportar'),
+    # Vista previa e impresión del inventario (ampliación W12)
+    path('imprimir/',
+         views.inventario_imprimir,
+         name='imprimir'),
     path('exportar-excel/',
          views.exportar_excel,
          name='exportar_excel'),
