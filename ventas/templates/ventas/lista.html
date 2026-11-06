@@ -6,8 +6,28 @@
 <div class="erp-page-title">
     <h2>💰 Ventas</h2>
     {% if user.is_authenticated %}
-        <a href="{% url 'ventas:crear' %}"
-           class="btn-erp-gold ms-auto">+ Nueva venta</a>
+        <!-- Tickets en lote: las casillas y botones se unen a este formulario con form="form-tickets" -->
+        <form id="form-tickets" method="get" action="{% url 'ventas:tickets' %}"
+              target="_blank"></form>
+        <div class="ms-auto" style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;">
+            <select name="papel" id="papel-tickets" form="form-tickets"
+                    aria-label="Papel del ticket">
+                {% for clave, info in papeles_ticket %}
+                <option value="{{ clave }}"{% if clave == papel_ticket_defecto %} selected{% endif %}>{{ info.etiqueta }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" form="form-tickets" name="formato" value="html"
+                    id="btn-imprimir" class="btn-erp-primary" disabled
+                    title="Marca una o más ventas">
+                🖨 Imprimir (<span class="contador-tickets">0</span>)
+            </button>
+            <button type="submit" form="form-tickets" name="formato" value="pdf"
+                    formtarget="_self" id="btn-exportar" class="btn-erp-gold" disabled
+                    title="Marca una o más ventas">
+                ⬇ Exportar PDF (<span class="contador-tickets">0</span>)
+            </button>
+            <a href="{% url 'ventas:crear' %}" class="btn-erp-gold">+ Nueva venta</a>
+        </div>
     {% endif %}
 </div>
 
@@ -15,6 +35,12 @@
 <table class="erp-table">
     <thead>
         <tr>
+            {% if user.is_authenticated %}
+            <th style="width:2rem;">
+                <input type="checkbox" id="marcar-todas"
+                       aria-label="Seleccionar todas las ventas de esta página">
+            </th>
+            {% endif %}
             <th>#</th><th>Cliente</th><th>Fecha</th><th>Total</th>
             {% if user.is_authenticated %}<th>Acciones</th>{% endif %}
         </tr>
@@ -22,6 +48,13 @@
     <tbody>
         {% for v in ventas %}
         <tr>
+            {% if user.is_authenticated %}
+            <td>
+                <input type="checkbox" name="ids" value="{{ v.pk }}"
+                       form="form-tickets" class="marca-ticket"
+                       aria-label="Seleccionar venta {{ v.pk }}">
+            </td>
+            {% endif %}
             <td>
                 <a href="{% url 'ventas:detalle' v.pk %}"
                    style="color:var(--clr-royal);font-weight:600;">
@@ -62,5 +95,45 @@
 
 {% else %}
 <div class="erp-alert-info">No hay ventas registradas aún.</div>
+{% endif %}
+
+{% if user.is_authenticated and ventas %}
+<p style="color:var(--clr-muted);font-size:.8rem;margin-top:1rem;">
+    La selección es de esta página (máximo 100 tickets por impresión).
+</p>
+<script>
+    // Habilita los botones según las casillas marcadas y recuerda el papel elegido.
+    (function () {
+        var marcas = document.querySelectorAll('.marca-ticket');
+        var todas = document.getElementById('marcar-todas');
+        var botones = [document.getElementById('btn-imprimir'),
+                       document.getElementById('btn-exportar')];
+        var papel = document.getElementById('papel-tickets');
+
+        function actualizar() {
+            var n = document.querySelectorAll('.marca-ticket:checked').length;
+            document.querySelectorAll('.contador-tickets').forEach(function (s) { s.textContent = n; });
+            botones.forEach(function (b) { if (b) b.disabled = (n === 0); });
+            if (todas) todas.checked = (n > 0 && n === marcas.length);
+        }
+        marcas.forEach(function (c) { c.addEventListener('change', actualizar); });
+        if (todas) todas.addEventListener('change', function () {
+            marcas.forEach(function (c) { c.checked = todas.checked; });
+            actualizar();
+        });
+        if (papel) {
+            try {
+                var g = localStorage.getItem('erp_papel_ticket');
+                if (g && Array.prototype.some.call(papel.options, function (o) { return o.value === g; })) {
+                    papel.value = g;
+                }
+            } catch (e) { /* sin almacenamiento: queda el papel por defecto */ }
+            papel.addEventListener('change', function () {
+                try { localStorage.setItem('erp_papel_ticket', papel.value); } catch (e) {}
+            });
+        }
+        actualizar();
+    })();
+</script>
 {% endif %}
 {% endblock %}

@@ -110,3 +110,88 @@ class TicketIndividualTest(TicketBaseTest):
         self.assertContains(r, 'Imprimir ticket')
         # El botón anterior de la factura sigue ahí.
         self.assertContains(r, reverse('ventas:pdf', args=[self.venta.pk]))
+
+
+class TicketsLoteTest(TicketBaseTest):
+    """GET /ventas/tickets/?ids=1&ids=2&formato=html|pdf"""
+
+    def setUp(self):
+        super().setUp()
+        self.venta2 = _crear_venta(self.cli, self.prod, 1, '99.50')
+        self.url = reverse('ventas:tickets')
+        self.client.login(username='tk_user', password='pass')
+
+    def _get(self, **params):
+        return self.client.get(self.url, params)
+
+    def test_sin_login_redirige_a_login(self):
+        self.client.logout()
+        r = self.client.get(self.url, {'ids': self.venta.pk})
+        self.assertEqual(r.status_code, 302)
+        self.assertIn('/accounts/login/', r['Location'])
+
+    def test_lote_html_muestra_todos_los_tickets(self):
+        r = self._get(ids=[self.venta.pk, self.venta2.pk])
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, '300.00')
+        self.assertContains(r, '99.50')
+        self.assertContains(r, 'class="ticket"', count=2)
+
+    def test_ids_repetidos_no_duplican_tickets(self):
+        r = self._get(ids=[self.venta.pk, self.venta.pk])
+        self.assertContains(r, 'class="ticket"', count=1)
+
+    def test_ids_inexistentes_se_ignoran_si_hay_alguno_valido(self):
+        r = self._get(ids=[self.venta.pk, 99999])
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'class="ticket"', count=1)
+
+    def test_todos_inexistentes_404(self):
+        self.assertEqual(self._get(ids=[99998, 99999]).status_code, 404)
+
+    def test_sin_ids_400(self):
+        self.assertEqual(self._get().status_code, 400)
+
+    def test_ids_no_numericos_400(self):
+        for malo in ('abc', '1;2', '-1', '１２', '²', '1' * 30, ''):
+            self.assertEqual(self._get(ids=malo).status_code, 400, malo)
+
+    def test_mas_de_100_ids_400(self):
+        r = self._get(ids=list(range(1, 102)))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('máximo 100', r.content.decode('utf-8'))
+
+    def test_formato_y_papel_no_permitidos_400(self):
+        self.assertEqual(
+            self._get(ids=self.venta.pk, formato='exe').status_code, 400)
+        self.assertEqual(
+            self._get(ids=self.venta.pk, papel='9000mm').status_code, 400)
+
+    def test_pdf_sin_weasyprint_responde_503(self):
+        with patch('core.pdf_utils.generar_pdf',
+                   side_effect=OSError('sin pango')):
+            with self.assertLogs('ventas.views', level='ERROR'):
+                r = self._get(ids=self.venta.pk, formato='pdf')
+        self.assertEqual(r.status_code, 503)
+
+    @skipUnless(HAY_WEASYPRINT, 'WeasyPrint no disponible (usar Docker)')
+    def test_pdf_valido_y_attachment(self):
+        r = self._get(ids=[self.venta.pk, self.venta2.pk],
+                      formato='pdf', papel='80mm')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r['Content-Type'], 'application/pdf')
+        self.assertTrue(r.content.startswith(b'%PDF'))
+        self.assertIn('attachment', r['Content-Disposition'])
+
+    def test_lista_muestra_casillas_y_botones(self):
+        r = self.client.get(reverse('ventas:lista'))
+        self.assertContains(r, f'name="ids" value="{self.venta.pk}"')
+        self.assertContains(r, 'id="btn-imprimir"')
+        self.assertContains(r, 'id="btn-exportar"')
+        self.assertContains(r, reverse('ventas:crear'))  # Nueva venta sigue
+
+    def test_lista_sin_login_no_muestra_casillas(self):
+        self.client.logout()
+        r = self.client.get(reverse('ventas:lista'))
+        self.assertNotContains(r, 'name="ids"')
+        self.assertNotContains(r, 'id="btn-imprimir"')

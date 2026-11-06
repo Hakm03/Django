@@ -9,7 +9,7 @@ import logging
 
 from django.conf import settings
 from django.contrib import messages
-from django.http import HttpResponse, HttpResponseBadRequest
+from django.http import Http404, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
 from django.utils import timezone
@@ -43,6 +43,13 @@ class VentaListView(ListView):
             .select_related('cliente')
             .order_by('-fecha')
         )
+
+    def get_context_data(self, **kwargs):
+        """Agrega los papeles disponibles para imprimir tickets en lote."""
+        contexto = super().get_context_data(**kwargs)
+        contexto['papeles_ticket'] = list(PAPELES_TICKET.items())
+        contexto['papel_ticket_defecto'] = PAPEL_TICKET_DEFECTO
+        return contexto
 
 
 class VentaDetailView(DetailView):
@@ -247,4 +254,47 @@ def venta_ticket(request, venta_id):
     return _respuesta_tickets(
         request, [venta], papel,
         accion=reverse('ventas:ticket', args=[venta.pk]),
+    )
+
+
+@login_required
+def venta_tickets_lote(request):
+    """Tickets de VARIAS ventas a la vez (?ids=1&ids=2&formato=html|pdf)."""
+    papel = _papel_de_la_peticion(request)
+    if papel is None:
+        return _error_400(
+            'Papel no válido. Permitidos: ' + ', '.join(PAPELES_TICKET) + '.')
+    formato = request.GET.get('formato', 'html').strip().lower()
+    if formato not in FORMATOS_TICKET:
+        return _error_400('Formato no válido. Permitidos: html, pdf.')
+
+    ids = []
+    for crudo in request.GET.getlist('ids'):
+        crudo = crudo.strip()
+        # Solo dígitos ASCII y de largo razonable (evita desbordar la BD).
+        if not (crudo.isascii() and crudo.isdigit() and len(crudo) <= 9):
+            return _error_400('Lista de ventas no válida.')
+        numero = int(crudo)
+        if numero not in ids:
+            ids.append(numero)
+    if not ids:
+        return _error_400('Selecciona al menos una venta.')
+    if len(ids) > MAX_TICKETS_LOTE:
+        return _error_400(
+            f'Demasiadas ventas: máximo {MAX_TICKETS_LOTE} tickets a la vez.')
+
+    ventas = list(
+        Venta.objects
+        .select_related('cliente')
+        .prefetch_related('detalles__producto')
+        .filter(pk__in=ids)
+        .order_by('pk')
+    )
+    if not ventas:
+        raise Http404('Ninguna de las ventas seleccionadas existe.')
+    return _respuesta_tickets(
+        request, ventas, papel,
+        ids=[v.pk for v in ventas],
+        accion=reverse('ventas:tickets'),
+        formato=formato,
     )
