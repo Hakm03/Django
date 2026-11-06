@@ -6,8 +6,10 @@
 <div class="erp-page-title">
     <h2>💰 Venta #{{ venta.pk }}</h2>
     {% if user.is_authenticated %}
+        <a href="{% url 'ventas:ticket' venta.pk %}" target="_blank"
+           rel="noopener" class="btn-erp-primary ms-auto">🖨 Imprimir ticket</a>
         <a href="{% url 'ventas:pdf' venta.pk %}"
-           class="btn-erp-gold ms-auto">⬇ Descargar PDF</a>
+           class="btn-erp-gold">⬇ Descargar PDF</a>
         <a href="{% url 'ventas:eliminar' venta.pk %}"
            class="btn-erp-danger">Eliminar venta</a>
     {% endif %}

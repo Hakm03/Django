@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if ventas|length == 1 %}Ticket de venta #{{ ventas.0.pk }}{% else %}Tickets de venta ({{ ventas|length }}){% endif %}</title>
+<style>
+    /* Tamaño de papel elegido (valor tomado de una lista permitida en views.py) */
+    @page { size: {{ papel_info.pagina }}; margin: {{ papel_info.margen }}; }
+
+    * { box-sizing: border-box; }
+    body {
+        margin: 0;
+        font-family: "Liberation Sans", "DejaVu Sans", Arial, Helvetica, sans-serif;
+        color: #000;
+        background: #e6e6e6;
+        font-size: {{ papel_info.fuente }};
+        line-height: 1.35;
+    }
+
+    /* ── Barra de acciones: solo en pantalla ── */
+    .barra {
+        position: sticky; top: 0; z-index: 5;
+        display: flex; flex-wrap: wrap; gap: .5rem; align-items: center;
+        padding: .6rem 1rem; background: #222; color: #fff;
+        font-size: 14px;
+    }
+    .barra form { display: flex; gap: .5rem; align-items: center; margin: 0; }
+    .barra select, .barra button {
+        font: inherit; padding: .35rem .7rem; border-radius: 4px; border: 1px solid #888;
+    }
+    .barra button { background: #fff; color: #000; cursor: pointer; }
+    .barra button.principal { background: #0b5; border-color: #0b5; color: #fff; font-weight: 700; }
+    .barra .espacio { flex: 1; }
+    .aviso { padding: .5rem 1rem; font-size: 13px; color: #444; }
+
+    /* ── Ticket ── */
+    .hoja { padding: 1rem 0 2rem; }
+    .ticket {
+        width: {{ papel_info.ancho }};
+        margin: 0 auto 1.2rem;
+        padding: 6mm 4mm;
+        background: #fff;
+        box-shadow: 0 1px 6px rgba(0,0,0,.3);
+    }
+    .centro { text-align: center; }
+    .negocio { font-size: 1.25em; font-weight: 700; margin: 0; }
+    .chico { font-size: .85em; color: #333; }
+    .titulo { font-weight: 700; letter-spacing: .05em; margin: .5em 0 .2em; }
+    hr { border: 0; border-top: 1px dashed #000; margin: .55em 0; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; font-size: .85em; border-bottom: 1px solid #000; padding: 2px 0; }
+    td { padding: 3px 0; vertical-align: top; }
+    .der { text-align: right; white-space: nowrap; }
+    .total { display: flex; justify-content: space-between; font-weight: 700; font-size: 1.2em; margin-top: .4em; }
+
+    /* ── Impresión ── */
+    @media print {
+        body { background: #fff; }
+        .barra, .aviso { display: none !important; }
+        .hoja { padding: 0; }
+        .ticket { width: {{ papel_info.ancho_impresion }}; margin: 0 auto; padding: 0; box-shadow: none; }
+        .ticket + .ticket { page-break-before: always; break-before: page; }
+    }
+</style>
+</head>
+<body>
+
+{% if not es_pdf %}
+<div class="barra">
+    <strong>Vista previa</strong>
+    <form method="get" action="{{ accion }}">
+        {% for i in ids %}<input type="hidden" name="ids" value="{{ i }}">{% endfor %}
+        <label for="papel">Papel:</label>
+        <select name="papel" id="papel" onchange="this.form.submit()">
+            {% for clave, info in papeles %}
+            <option value="{{ clave }}"{% if clave == papel %} selected{% endif %}>{{ info.etiqueta }}</option>
+            {% endfor %}
+        </select>
+        <noscript><button type="submit">Aplicar</button></noscript>
+    </form>
+    <span class="espacio"></span>
+    <button type="button" class="principal" onclick="window.print()">🖨 Imprimir</button>
+    <button type="button" onclick="window.close()">Cerrar</button>
+</div>
+<div class="aviso">
+    En el cuadro de impresión también puedes elegir «Guardar como PDF».
+    Si el tamaño no coincide con tu impresora, revisa el papel en ese cuadro.
+</div>
+{% endif %}
+
+<main class="hoja">
+{% for venta in ventas %}
+    <section class="ticket">
+        <div class="centro">
+            <p class="negocio">{{ empresa.nombre_empresa }}</p>
+            {% if empresa.rfc %}<div class="chico">RFC: {{ empresa.rfc }}</div>{% endif %}
+            <div class="titulo">TICKET DE VENTA</div>
+            <div class="chico">Folio {{ venta.pk|stringformat:"05d" }}</div>
+        </div>
+        <hr>
+        <div class="chico">
+            Fecha: {{ venta.fecha|date:"d/m/Y H:i" }}<br>
+            Cliente: {{ venta.cliente }}
+        </div>
+        <hr>
+        <table>
+            <thead>
+                <tr><th>Producto</th><th class="der">Cant.</th><th class="der">Importe</th></tr>
+            </thead>
+            <tbody>
+                {% for d in venta.detalles.all %}
+                <tr>
+                    <td>{{ d.producto.nombre }}<br><span class="chico">${{ d.precio_unitario }} c/u</span></td>
+                    <td class="der">{{ d.cantidad }}</td>
+                    <td class="der">${{ d.subtotal }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="3" class="chico">Sin productos.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <hr>
+        <div class="total"><span>TOTAL</span><span>${{ venta.total }}</span></div>
+        <hr>
+        <div class="centro chico">¡Gracias por su compra!</div>
+    </section>
+{% endfor %}
+</main>
+
+{% if not es_pdf %}
+<script>
+    // Recuerda el papel elegido (solo comodidad; si el navegador lo bloquea, no pasa nada).
+    (function () {
+        var sel = document.getElementById('papel');
+        if (!sel) return;
+        try {
+            var url = new URL(window.location.href);
+            var guardado = localStorage.getItem('erp_papel_ticket');
+            var validos = Array.prototype.map.call(sel.options, function (o) { return o.value; });
+            if (!url.searchParams.has('papel') && guardado && validos.indexOf(guardado) !== -1
+                    && guardado !== sel.value) {
+                url.searchParams.set('papel', guardado);
+                window.location.replace(url.toString());
+                return;
+            }
+            localStorage.setItem('erp_papel_ticket', sel.value);
+        } catch (e) { /* sin almacenamiento: se usa el papel por defecto */ }
+    })();
+</script>
+{% endif %}
+</body>
+</html>
