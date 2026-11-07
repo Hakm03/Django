@@ -103,11 +103,11 @@ class TicketIndividualTest(TicketBaseTest):
         self.assertNotContains(r, '<script>alert(1)</script>')
         self.assertContains(r, '&lt;script&gt;alert(1)&lt;/script&gt;')
 
-    def test_detalle_tiene_boton_imprimir_ticket(self):
+    def test_detalle_tiene_boton_vista_previa(self):
         self.client.login(username='tk_user', password='pass')
         r = self.client.get(reverse('ventas:detalle', args=[self.venta.pk]))
         self.assertContains(r, self.url)
-        self.assertContains(r, 'Imprimir ticket')
+        self.assertContains(r, 'Vista previa')
         # El botón anterior de la factura sigue ahí.
         self.assertContains(r, reverse('ventas:pdf', args=[self.venta.pk]))
 
@@ -183,18 +183,86 @@ class TicketsLoteTest(TicketBaseTest):
         self.assertTrue(r.content.startswith(b'%PDF'))
         self.assertIn('attachment', r['Content-Disposition'])
 
-    def test_lista_muestra_casillas_y_botones(self):
+    def test_lista_muestra_casillas_y_un_solo_boton_oculto(self):
         r = self.client.get(reverse('ventas:lista'))
         self.assertContains(r, f'name="ids" value="{self.venta.pk}"')
-        self.assertContains(r, 'id="btn-imprimir"')
-        self.assertContains(r, 'id="btn-exportar"')
+        # Un solo botón "Vista previa", oculto hasta marcar una casilla.
+        self.assertContains(r, 'id="btn-vista-previa"')
+        self.assertContains(r, 'hidden>')
+        self.assertNotContains(r, 'id="btn-imprimir"')
+        self.assertNotContains(r, 'id="btn-exportar"')
+        self.assertNotContains(r, 'name="papel"')
         self.assertContains(r, reverse('ventas:crear'))  # Nueva venta sigue
 
     def test_lista_sin_login_no_muestra_casillas(self):
         self.client.logout()
         r = self.client.get(reverse('ventas:lista'))
         self.assertNotContains(r, 'name="ids"')
-        self.assertNotContains(r, 'id="btn-imprimir"')
+        self.assertNotContains(r, 'id="btn-vista-previa"')
+
+    def test_vista_previa_ofrece_hojas_y_formatos(self):
+        r = self._get(ids=[self.venta.pk, self.venta2.pk])
+        for hoja in ('58mm', '80mm', 'a5', 'a4', 'carta'):
+            self.assertContains(r, f'data-vp-hoja="{hoja}"')
+        tickets = reverse('ventas:tickets')
+        for formato in ('pdf', 'xlsx', 'csv'):
+            self.assertContains(r, f'{tickets}?ids={self.venta.pk}&amp;'
+                                   f'ids={self.venta2.pk}&amp;formato={formato}')
+        self.assertContains(r, 'data-vp-con-hoja="1"')   # solo el PDF usa la hoja
+
+    def test_xlsx_de_ventas(self):
+        from io import BytesIO
+        from openpyxl import load_workbook
+        r = self._get(ids=[self.venta.pk, self.venta2.pk], formato='xlsx')
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('spreadsheetml', r['Content-Type'])
+        self.assertIn('attachment', r['Content-Disposition'])
+        self.assertIn('.xlsx', r['Content-Disposition'])
+        hoja = load_workbook(BytesIO(r.content)).active
+        self.assertEqual(hoja['A1'].value, 'Folio')
+        self.assertEqual(hoja.max_row, 3)             # encabezado + 2 líneas
+        self.assertEqual(hoja['D2'].value, 'Mouse')
+        self.assertEqual(hoja['H2'].value, Decimal('300.00'))
+
+    def test_xlsx_texto_con_formula_queda_como_texto(self):
+        from io import BytesIO
+        from openpyxl import load_workbook
+        self.prod.nombre = '=1+1'
+        self.prod.save()
+        r = self._get(ids=self.venta.pk, formato='xlsx')
+        celda = load_workbook(BytesIO(r.content)).active['D2']
+        self.assertEqual(celda.data_type, 's')
+        self.assertEqual(celda.value, '=1+1')
+
+    def test_csv_de_ventas(self):
+        r = self._get(ids=[self.venta.pk, self.venta2.pk], formato='csv')
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('text/csv', r['Content-Type'])
+        self.assertIn('.csv', r['Content-Disposition'])
+        texto = r.content.decode('utf-8')
+        self.assertTrue(texto.startswith('﻿'))
+        self.assertIn('Folio,Fecha,Cliente,Producto', texto)
+        self.assertIn('Mouse', texto)
+
+    def test_csv_protege_formulas(self):
+        for prefijo in ('=', '+', '-', '@'):
+            self.prod.nombre = f'{prefijo}CMD'
+            self.prod.save()
+            texto = self._get(ids=self.venta.pk,
+                              formato='csv').content.decode('utf-8')
+            self.assertIn(f"'{prefijo}CMD", texto, prefijo)
+
+    def test_xlsx_y_csv_sin_login_redirigen(self):
+        self.client.logout()
+        for formato in ('xlsx', 'csv'):
+            r = self.client.get(self.url, {'ids': self.venta.pk,
+                                           'formato': formato})
+            self.assertEqual(r.status_code, 302, formato)
+            self.assertIn('/accounts/login/', r['Location'])
+
+    def test_xlsx_ids_inexistentes_404_e_invalidos_400(self):
+        self.assertEqual(self._get(ids=99999, formato='xlsx').status_code, 404)
+        self.assertEqual(self._get(ids='x', formato='csv').status_code, 400)
 
 
 class InventarioImprimirTest(TestCase):

@@ -44,13 +44,6 @@ class VentaListView(ListView):
             .order_by('-fecha')
         )
 
-    def get_context_data(self, **kwargs):
-        """Agrega los papeles disponibles para imprimir tickets en lote."""
-        contexto = super().get_context_data(**kwargs)
-        contexto['papeles_ticket'] = list(PAPELES_TICKET.items())
-        contexto['papel_ticket_defecto'] = PAPEL_TICKET_DEFECTO
-        return contexto
-
 
 class VentaDetailView(DetailView):
     """Detalle de una venta con todas sus líneas de producto."""
@@ -163,29 +156,36 @@ def venta_pdf(request, venta_id):
 
 
 
-# ── W12 (ampliación): tickets de venta (imprimir / vista previa / lote) ───
+# ── W12 (ampliación): tickets de venta (vista previa / imprimir / lote) ───
 # Papeles permitidos. El valor que llega por ?papel= SOLO se usa como llave
 # de este diccionario; nunca se pega directo en el CSS.
 PAPELES_TICKET = {
-    '58mm': {'etiqueta': 'Térmica 58 mm', 'pagina': '58mm auto',
-             'pagina_pdf': '58mm 297mm', 'margen': '2mm', 'fuente': '9pt',
+    '58mm': {'etiqueta': 'Térmica 58 mm', 'detalle': 'Rollo de 58 mm',
+             'pagina': '58mm auto', 'pagina_pdf': '58mm 297mm',
+             'margen': '2mm', 'fuente': '9pt',
              'ancho': '54mm', 'ancho_impresion': '100%'},
-    '80mm': {'etiqueta': 'Térmica 80 mm', 'pagina': '80mm auto',
-             'pagina_pdf': '80mm 297mm', 'margen': '3mm', 'fuente': '10pt',
+    '80mm': {'etiqueta': 'Térmica 80 mm', 'detalle': 'Rollo de 80 mm',
+             'pagina': '80mm auto', 'pagina_pdf': '80mm 297mm',
+             'margen': '3mm', 'fuente': '10pt',
              'ancho': '76mm', 'ancho_impresion': '100%'},
-    'a5':   {'etiqueta': 'Media hoja (A5)', 'pagina': 'A5',
-             'pagina_pdf': 'A5', 'margen': '10mm', 'fuente': '11pt',
+    'a5':   {'etiqueta': 'Media hoja (A5)', 'detalle': '148 × 210 mm',
+             'pagina': 'A5', 'pagina_pdf': 'A5',
+             'margen': '10mm', 'fuente': '11pt',
              'ancho': '120mm', 'ancho_impresion': '110mm'},
-    'a4':   {'etiqueta': 'Hoja A4', 'pagina': 'A4',
-             'pagina_pdf': 'A4', 'margen': '15mm', 'fuente': '11pt',
+    'a4':   {'etiqueta': 'Hoja A4', 'detalle': '210 × 297 mm',
+             'pagina': 'A4', 'pagina_pdf': 'A4',
+             'margen': '15mm', 'fuente': '11pt',
              'ancho': '120mm', 'ancho_impresion': '110mm'},
-    'carta': {'etiqueta': 'Hoja Carta', 'pagina': 'letter',
-              'pagina_pdf': 'letter', 'margen': '15mm', 'fuente': '11pt',
+    'carta': {'etiqueta': 'Hoja Carta', 'detalle': '216 × 279 mm',
+              'pagina': 'letter', 'pagina_pdf': 'letter',
+              'margen': '15mm', 'fuente': '11pt',
               'ancho': '120mm', 'ancho_impresion': '110mm'},
 }
 PAPEL_TICKET_DEFECTO = '80mm'
-FORMATOS_TICKET = {'html', 'pdf'}   # lista permitida de ?formato=
-MAX_TICKETS_LOTE = 100              # tope de tickets por impresión/PDF
+FORMATOS_TICKET = {'html', 'pdf', 'xlsx', 'csv'}   # lista permitida de ?formato=
+MAX_TICKETS_LOTE = 100              # tope de tickets por impresión/exportación
+ENCABEZADOS_VENTAS = ['Folio', 'Fecha', 'Cliente', 'Producto', 'Cantidad',
+                      'Precio unitario', 'Subtotal', 'Total de la venta']
 
 
 def _papel_de_la_peticion(request):
@@ -194,24 +194,121 @@ def _papel_de_la_peticion(request):
     return papel if papel in PAPELES_TICKET else None
 
 
-def _respuesta_tickets(request, ventas, papel, ids=(), accion='',
-                       formato='html'):
-    """Arma los tickets (pantalla para imprimir, o PDF descargable)."""
+def _filas_ventas(ventas):
+    """Una fila por línea de detalle (o una fila si la venta no tiene líneas)."""
+    for v in ventas:
+        fecha = timezone.localtime(v.fecha).strftime('%d/%m/%Y %H:%M')
+        lineas = list(v.detalles.all())
+        total = v.total
+        if not lineas:
+            yield [v.pk, fecha, str(v.cliente), 'Sin productos', 0, 0, 0, total]
+        for d in lineas:
+            yield [v.pk, fecha, str(v.cliente), d.producto.nombre,
+                   d.cantidad, d.precio_unitario, d.subtotal, total]
+
+
+def _respuesta_ventas_xlsx(ventas):
+    """Descarga de las ventas elegidas en .xlsx (textos marcados como texto)."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from productos.views import _celda_texto
+
+    libro = Workbook()
+    hoja = libro.active
+    hoja.title = 'Ventas'
+    for col, texto in enumerate(ENCABEZADOS_VENTAS, start=1):
+        celda = hoja.cell(row=1, column=col, value=texto)
+        celda.font = Font(bold=True, color='FFFFFF')
+        celda.fill = PatternFill('solid', fgColor='1F3A5F')
+        celda.alignment = Alignment(horizontal='center')
+    fila = 1
+    for fila, datos in enumerate(_filas_ventas(ventas), start=2):
+        folio, fecha, cliente, producto, cant, precio, sub, total = datos
+        hoja.cell(row=fila, column=1, value=folio).number_format = '00000'
+        _celda_texto(hoja, fila, 2, fecha)
+        _celda_texto(hoja, fila, 3, cliente)
+        _celda_texto(hoja, fila, 4, producto)
+        hoja.cell(row=fila, column=5, value=cant)
+        hoja.cell(row=fila, column=6, value=precio).number_format = '#,##0.00'
+        hoja.cell(row=fila, column=7, value=sub).number_format = '#,##0.00'
+        hoja.cell(row=fila, column=8, value=total).number_format = '#,##0.00'
+    hoja.freeze_panes = 'A2'
+    hoja.auto_filter.ref = f'A1:H{max(fila, 1)}'
+    for letra, ancho in zip('ABCDEFGH', (9, 18, 26, 32, 10, 15, 13, 17)):
+        hoja.column_dimensions[letra].width = ancho
+    respuesta = HttpResponse(
+        content_type=('application/vnd.openxmlformats-officedocument.'
+                      'spreadsheetml.sheet'))
+    respuesta['Content-Disposition'] = (
+        f'attachment; filename="ventas_{timezone.localdate():%Y-%m-%d}.xlsx"')
+    libro.save(respuesta)
+    return respuesta
+
+
+def _respuesta_ventas_csv(ventas):
+    """Descarga de las ventas elegidas en .csv (sin fórmulas ejecutables)."""
+    import csv
+    from productos.views import _texto_csv_seguro
+
+    respuesta = HttpResponse(content_type='text/csv; charset=utf-8')
+    respuesta['Content-Disposition'] = (
+        f'attachment; filename="ventas_{timezone.localdate():%Y-%m-%d}.csv"')
+    respuesta.write('﻿')   # BOM: Excel muestra bien los acentos
+    escritor = csv.writer(respuesta)
+    escritor.writerow(ENCABEZADOS_VENTAS)
+    for datos in _filas_ventas(ventas):
+        folio, fecha, cliente, producto, cant, precio, sub, total = datos
+        escritor.writerow([
+            folio, fecha, _texto_csv_seguro(cliente),
+            _texto_csv_seguro(producto), cant, precio, sub, total,
+        ])
+    return respuesta
+
+
+def _respuesta_tickets(request, ventas, papel, formato='html'):
+    """Vista previa de tickets (HTML) o descarga (PDF / Excel / CSV)."""
+    from urllib.parse import urlencode
     from configuracion.models import ConfiguracionERP
+
+    if formato == 'xlsx':
+        return _respuesta_ventas_xlsx(ventas)
+    if formato == 'csv':
+        return _respuesta_ventas_csv(ventas)
 
     es_pdf = formato == 'pdf'
     info = dict(PAPELES_TICKET[papel])
     if es_pdf:
         info['pagina'] = info['pagina_pdf']
+
+    def _url(fmt):
+        consulta = [('ids', v.pk) for v in ventas] + [('formato', fmt)]
+        return f"{reverse('ventas:tickets')}?{urlencode(consulta)}"
+
     contexto = {
         'ventas': ventas,
         'papel': papel,
         'papel_info': info,
-        'papeles': list(PAPELES_TICKET.items()),
         'empresa': ConfiguracionERP.get_instance(),
-        'ids': list(ids),
-        'accion': accion,
         'es_pdf': es_pdf,
+        'vp_titulo': ('Ticket de venta — vista previa' if len(ventas) == 1
+                      else f'{len(ventas)} tickets — vista previa'),
+        'hojas_js': {
+            'actual': papel,
+            'clave_guardado': 'erp_papel_ticket',
+            'hojas': {
+                k: {c: h[c] for c in ('etiqueta', 'detalle', 'pagina', 'margen',
+                                      'ancho', 'ancho_impresion', 'fuente')}
+                for k, h in PAPELES_TICKET.items()
+            },
+        },
+        'formatos': [
+            {'etiqueta': 'PDF', 'detalle': 'Tickets con la hoja elegida (.pdf)',
+             'url': _url('pdf'), 'con_hoja': True},
+            {'etiqueta': 'Excel', 'detalle': 'Hoja de cálculo (.xlsx)',
+             'url': _url('xlsx')},
+            {'etiqueta': 'CSV', 'detalle': 'Texto separado por comas (.csv)',
+             'url': _url('csv')},
+        ],
     }
     if not es_pdf:
         return render(request, 'ventas/ticket.html', contexto)
@@ -240,7 +337,7 @@ def _error_400(mensaje):
 
 @login_required
 def venta_ticket(request, venta_id):
-    """Vista previa e impresión del ticket de UNA venta."""
+    """Vista previa del ticket de UNA venta (con Imprimir ▾ y Exportar ▾)."""
     papel = _papel_de_la_peticion(request)
     if papel is None:
         return _error_400(
@@ -251,22 +348,19 @@ def venta_ticket(request, venta_id):
         .prefetch_related('detalles__producto'),
         pk=venta_id,
     )
-    return _respuesta_tickets(
-        request, [venta], papel,
-        accion=reverse('ventas:ticket', args=[venta.pk]),
-    )
+    return _respuesta_tickets(request, [venta], papel)
 
 
 @login_required
 def venta_tickets_lote(request):
-    """Tickets de VARIAS ventas a la vez (?ids=1&ids=2&formato=html|pdf)."""
+    """Varias ventas a la vez: ?ids=1&ids=2&formato=html|pdf|xlsx|csv."""
     papel = _papel_de_la_peticion(request)
     if papel is None:
         return _error_400(
             'Papel no válido. Permitidos: ' + ', '.join(PAPELES_TICKET) + '.')
     formato = request.GET.get('formato', 'html').strip().lower()
     if formato not in FORMATOS_TICKET:
-        return _error_400('Formato no válido. Permitidos: html, pdf.')
+        return _error_400('Formato no válido. Permitidos: html, pdf, xlsx, csv.')
 
     ids = []
     for crudo in request.GET.getlist('ids'):
@@ -292,9 +386,4 @@ def venta_tickets_lote(request):
     )
     if not ventas:
         raise Http404('Ninguna de las ventas seleccionadas existe.')
-    return _respuesta_tickets(
-        request, ventas, papel,
-        ids=[v.pk for v in ventas],
-        accion=reverse('ventas:tickets'),
-        formato=formato,
-    )
+    return _respuesta_tickets(request, ventas, papel, formato=formato)

@@ -10,21 +10,10 @@
         <form id="form-tickets" method="get" action="{% url 'ventas:tickets' %}"
               target="_blank"></form>
         <div class="ms-auto" style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;">
-            <select name="papel" id="papel-tickets" form="form-tickets"
-                    aria-label="Papel del ticket">
-                {% for clave, info in papeles_ticket %}
-                <option value="{{ clave }}"{% if clave == papel_ticket_defecto %} selected{% endif %}>{{ info.etiqueta }}</option>
-                {% endfor %}
-            </select>
-            <button type="submit" form="form-tickets" name="formato" value="html"
-                    id="btn-imprimir" class="btn-erp-primary" disabled
-                    title="Marca una o más ventas">
-                🖨 Imprimir (<span class="contador-tickets">0</span>)
-            </button>
-            <button type="submit" form="form-tickets" name="formato" value="pdf"
-                    formtarget="_self" id="btn-exportar" class="btn-erp-gold" disabled
-                    title="Marca una o más ventas">
-                ⬇ Exportar PDF (<span class="contador-tickets">0</span>)
+            <!-- Aparece solo cuando hay al menos una casilla marcada -->
+            <button type="submit" form="form-tickets" id="btn-vista-previa"
+                    class="btn-erp-primary" hidden>
+                <svg class="erp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>Vista previa (<span id="contador-tickets">0</span>)
             </button>
             <a href="{% url 'ventas:crear' %}" class="btn-erp-gold">+ Nueva venta</a>
         </div>
@@ -101,19 +90,19 @@
 <p style="color:var(--clr-muted);font-size:.8rem;margin-top:1rem;">
     La selección es de esta página (máximo 100 tickets por impresión).
 </p>
+<style>#btn-vista-previa[hidden] { display: none; }</style>
 <script>
-    // Habilita los botones según las casillas marcadas y recuerda el papel elegido.
+    // "Vista previa (N)" solo aparece cuando hay casillas marcadas.
     (function () {
         var marcas = document.querySelectorAll('.marca-ticket');
         var todas = document.getElementById('marcar-todas');
-        var botones = [document.getElementById('btn-imprimir'),
-                       document.getElementById('btn-exportar')];
-        var papel = document.getElementById('papel-tickets');
+        var boton = document.getElementById('btn-vista-previa');
+        var contador = document.getElementById('contador-tickets');
 
         function actualizar() {
             var n = document.querySelectorAll('.marca-ticket:checked').length;
-            document.querySelectorAll('.contador-tickets').forEach(function (s) { s.textContent = n; });
-            botones.forEach(function (b) { if (b) b.disabled = (n === 0); });
+            if (contador) contador.textContent = n;
+            if (boton) boton.hidden = (n === 0);
             if (todas) todas.checked = (n > 0 && n === marcas.length);
         }
         marcas.forEach(function (c) { c.addEventListener('change', actualizar); });
@@ -121,17 +110,7 @@
             marcas.forEach(function (c) { c.checked = todas.checked; });
             actualizar();
         });
-        if (papel) {
-            try {
-                var g = localStorage.getItem('erp_papel_ticket');
-                if (g && Array.prototype.some.call(papel.options, function (o) { return o.value === g; })) {
-                    papel.value = g;
-                }
-            } catch (e) { /* sin almacenamiento: queda el papel por defecto */ }
-            papel.addEventListener('change', function () {
-                try { localStorage.setItem('erp_papel_ticket', papel.value); } catch (e) {}
-            });
-        }
+        window.addEventListener('pageshow', actualizar);  // al volver con el botón "atrás"
         actualizar();
     })();
 </script>
