@@ -3,25 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Inventario — vista previa</title>
+<title>{{ titulo_documento }} — vista previa</title>
+<!-- Tamaño de hoja: lo reemplaza el JS de la barra al elegir otra hoja en Imprimir -->
+<style id="vp-estilo-pagina">@page { size: {{ papel_info.pagina }}; margin: {{ papel_info.margen }}; }</style>
 <style>
-    @page { size: {{ papel_info.pagina }}; margin: 15mm; }
+    :root {
+        --vp-ancho: {{ papel_info.ancho }};
+        --vp-ancho-print: {{ papel_info.ancho_impresion }};
+        --vp-fuente: {{ papel_info.fuente }};
+        --pg-fondo: #e9edf3;
+    }
+    html[data-theme="dark"] { --pg-fondo: #0D1B2A; }
     * { box-sizing: border-box; }
     body { margin: 0; font-family: "Liberation Sans", "DejaVu Sans", Arial, sans-serif;
-           font-size: 10pt; color: #000; background: #e6e6e6; }
+           font-size: var(--vp-fuente); color: #000; background: var(--pg-fondo); }
 
-    .barra { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap;
-             gap: .5rem; align-items: center; padding: .6rem 1rem;
-             background: #222; color: #fff; font-size: 14px; }
-    .barra form { display: flex; gap: .5rem; align-items: center; margin: 0; }
-    .barra select, .barra button { font: inherit; padding: .35rem .7rem;
-             border-radius: 4px; border: 1px solid #888; }
-    .barra button { background: #fff; color: #000; cursor: pointer; }
-    .barra button.principal { background: #0b5; border-color: #0b5; color: #fff; font-weight: 700; }
-    .barra .espacio { flex: 1; }
-
-    .pagina { max-width: 210mm; margin: 1rem auto 2rem; padding: 12mm;
-              background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.3); }
+    .pagina { width: var(--vp-ancho); max-width: calc(100% - 2rem); margin: 1.25rem auto 2rem;
+              padding: 12mm; background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,.25); }
     h1 { margin: 0; font-size: 16pt; }
     .sub { color: #333; font-size: 9pt; margin: 2px 0 10px; }
     table { width: 100%; border-collapse: collapse; }
@@ -34,30 +32,16 @@
 
     @media print {
         body { background: #fff; }
-        .barra { display: none !important; }
-        .pagina { max-width: none; margin: 0; padding: 0; box-shadow: none; }
+        .pagina { width: var(--vp-ancho-print); max-width: none; margin: 0; padding: 0; box-shadow: none; }
     }
 </style>
 </head>
 <body>
-<div class="barra">
-    <strong>Vista previa del inventario</strong>
-    <form method="get" action="{% url 'productos:imprimir' %}">
-        <label for="papel">Papel:</label>
-        <select name="papel" id="papel" onchange="this.form.submit()">
-            {% for clave, info in papeles %}
-            <option value="{{ clave }}"{% if clave == papel %} selected{% endif %}>{{ info.etiqueta }}</option>
-            {% endfor %}
-        </select>
-        <noscript><button type="submit">Aplicar</button></noscript>
-    </form>
-    <span class="espacio"></span>
-    <button type="button" class="principal" onclick="window.print()">🖨 Imprimir</button>
-    <button type="button" onclick="window.close()">Cerrar</button>
-</div>
+
+{% include "includes/vp_barra.html" %}
 
 <main class="pagina">
-    <h1>Inventario de productos</h1>
+    <h1>{{ titulo_documento }}</h1>
     <div class="sub">{{ empresa.nombre_empresa }} · {{ emitida|date:"d/m/Y H:i" }} · {{ productos|length }} producto(s)</div>
     <table>
         <thead>

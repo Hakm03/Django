@@ -12,7 +12,7 @@ from decimal import Decimal
 from django.contrib.auth.decorators import login_required
 from django.template.loader import render_to_string
 from django.utils import timezone
-from django.http import HttpResponse, HttpResponseBadRequest
+from django.http import Http404, HttpResponse, HttpResponseBadRequest
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from django.views.generic import DetailView, ListView
@@ -22,7 +22,7 @@ from .models import Producto
 # productos/views.py — agregar los imports al inicio del archivo:
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.views.generic import (
     CreateView, DeleteView, DetailView, ListView, UpdateView
 )
@@ -157,13 +157,42 @@ ENCABEZADOS_INVENTARIO = ['ID', 'Producto', 'Categoría', 'Proveedor',
                           'Precio', 'Stock', 'Valor en inventario', 'Activo']
 
 
-def _productos_inventario():
-    """Todos los productos con sus FK pre-cargadas (evita N+1)."""
-    return (
+MAX_IDS_FILTRO = 100  # tope de ?ids= en vista previa / exportación
+
+
+def _ids_de_la_peticion(request):
+    """Lee el filtro opcional ?ids=1&ids=2. Devuelve (ids, respuesta_error).
+
+    Solo se aceptan dígitos ASCII de largo razonable (evita desbordar la BD).
+    Sin ?ids= devuelve ([], None) y se usa todo el inventario.
+    """
+    ids = []
+    for crudo in request.GET.getlist('ids'):
+        crudo = crudo.strip()
+        if not (crudo.isascii() and crudo.isdigit() and len(crudo) <= 9):
+            return None, HttpResponseBadRequest(
+                'Lista de productos no válida.',
+                content_type='text/plain; charset=utf-8')
+        numero = int(crudo)
+        if numero not in ids:
+            ids.append(numero)
+    if len(ids) > MAX_IDS_FILTRO:
+        return None, HttpResponseBadRequest(
+            f'Demasiados productos: máximo {MAX_IDS_FILTRO} a la vez.',
+            content_type='text/plain; charset=utf-8')
+    return ids, None
+
+
+def _productos_inventario(ids=None):
+    """Productos con sus FK pre-cargadas (evita N+1). `ids` filtra (opcional)."""
+    qs = (
         Producto.objects
         .select_related('categoria', 'proveedor')
         .order_by('nombre')
     )
+    if ids:
+        qs = qs.filter(pk__in=ids)
+    return qs
 
 
 def _celda_texto(hoja, fila, columna, valor):
@@ -189,9 +218,9 @@ def _texto_csv_seguro(valor):
     return texto
 
 
-def _respuesta_xlsx():
+def _respuesta_xlsx(ids=None):
     """Construye la descarga del inventario en formato .xlsx."""
-    productos = _productos_inventario()
+    productos = _productos_inventario(ids)
 
     libro = Workbook()
     hoja = libro.active
@@ -243,7 +272,7 @@ def _respuesta_xlsx():
     return respuesta
 
 
-def _respuesta_csv():
+def _respuesta_csv(ids=None):
     """Construye la descarga del inventario en formato .csv."""
     respuesta = HttpResponse(content_type='text/csv; charset=utf-8')
     respuesta['Content-Disposition'] = (
@@ -253,7 +282,7 @@ def _respuesta_csv():
     respuesta.write('\ufeff')
     escritor = csv.writer(respuesta)
     escritor.writerow(ENCABEZADOS_INVENTARIO)
-    for p in _productos_inventario():
+    for p in _productos_inventario(ids):
         escritor.writerow([
             p.pk,
             _texto_csv_seguro(p.nombre),
@@ -267,9 +296,9 @@ def _respuesta_csv():
     return respuesta
 
 
-def _respuesta_pdf():
+def _respuesta_pdf(ids=None):
     """Construye la descarga del inventario en PDF (WeasyPrint)."""
-    productos_qs = _productos_inventario()
+    productos_qs = _productos_inventario(ids)
     if productos_qs.count() > MAX_PRODUCTOS_PDF:
         return HttpResponseBadRequest(
             f'Hay demasiados productos para un PDF (máximo '
@@ -303,18 +332,26 @@ def _respuesta_pdf():
 
 @login_required
 def exportar_inventario(request):
-    """Descarga el inventario en el formato elegido (?formato=xlsx|csv|pdf)."""
+    """Descarga el inventario en el formato elegido (?formato=xlsx|csv|pdf).
+
+    Opcional: ?ids=3&ids=5 para exportar solo esos productos.
+    """
     formato = request.GET.get('formato', 'xlsx').strip().lower()
     if formato not in FORMATOS_INVENTARIO:
         return HttpResponseBadRequest(
             'Formato no válido. Formatos permitidos: xlsx, csv, pdf.',
             content_type='text/plain; charset=utf-8',
         )
+    ids, error = _ids_de_la_peticion(request)
+    if error:
+        return error
+    if ids and not _productos_inventario(ids).exists():
+        raise Http404('Ninguno de los productos seleccionados existe.')
     if formato == 'csv':
-        return _respuesta_csv()
+        return _respuesta_csv(ids)
     if formato == 'pdf':
-        return _respuesta_pdf()
-    return _respuesta_xlsx()
+        return _respuesta_pdf(ids)
+    return _respuesta_xlsx(ids)
 
 
 @login_required
@@ -324,24 +361,39 @@ def exportar_excel(request):
 
 
 # ── W12 (ampliación): vista previa e impresión del inventario ─────────────
+# Hojas permitidas: la llave llega por ?papel= y SOLO se usa para buscar aquí.
 PAPELES_INVENTARIO = {
-    'a4':    {'etiqueta': 'Hoja A4',    'pagina': 'A4'},
-    'carta': {'etiqueta': 'Hoja Carta', 'pagina': 'letter'},
+    'a4':     {'etiqueta': 'Hoja A4', 'detalle': '210 × 297 mm',
+               'pagina': 'A4', 'margen': '15mm', 'ancho': '210mm',
+               'ancho_impresion': '100%', 'fuente': '10pt'},
+    'carta':  {'etiqueta': 'Hoja Carta', 'detalle': '216 × 279 mm',
+               'pagina': 'letter', 'margen': '15mm', 'ancho': '216mm',
+               'ancho_impresion': '100%', 'fuente': '10pt'},
+    'oficio': {'etiqueta': 'Hoja Oficio', 'detalle': '216 × 356 mm',
+               'pagina': '216mm 356mm', 'margen': '15mm', 'ancho': '216mm',
+               'ancho_impresion': '100%', 'fuente': '10pt'},
 }
 
 
 @login_required
 def inventario_imprimir(request):
-    """Vista previa del inventario con botón Imprimir (?papel=a4|carta)."""
+    """Vista previa del inventario: Imprimir ▾ (hoja) y Exportar ▾ (formato).
+
+    Opcional: ?ids=3 para previsualizar solo ese producto (ficha).
+    """
     from django.shortcuts import render
+    from urllib.parse import urlencode
 
     papel = request.GET.get('papel', 'a4').strip().lower()
     if papel not in PAPELES_INVENTARIO:
         return HttpResponseBadRequest(
-            'Papel no válido. Permitidos: a4, carta.',
+            'Papel no válido. Permitidos: ' + ', '.join(PAPELES_INVENTARIO) + '.',
             content_type='text/plain; charset=utf-8',
         )
-    productos_qs = _productos_inventario()
+    ids, error = _ids_de_la_peticion(request)
+    if error:
+        return error
+    productos_qs = _productos_inventario(ids)
     if productos_qs.count() > MAX_PRODUCTOS_PDF:
         return HttpResponseBadRequest(
             f'Hay demasiados productos para imprimir (máximo '
@@ -349,9 +401,22 @@ def inventario_imprimir(request):
             content_type='text/plain; charset=utf-8',
         )
     productos = list(productos_qs)
+    if ids and not productos:
+        raise Http404('Ninguno de los productos seleccionados existe.')
     for p in productos:
         p.valor = p.precio * p.stock
+
+    def _url(formato):
+        consulta = [('ids', i) for i in ids] + [('formato', formato)]
+        return f"{reverse('productos:exportar')}?{urlencode(consulta)}"
+
+    formatos = [
+        {'etiqueta': 'PDF', 'detalle': 'Documento (.pdf)', 'url': _url('pdf')},
+        {'etiqueta': 'Excel', 'detalle': 'Hoja de cálculo (.xlsx)', 'url': _url('xlsx')},
+        {'etiqueta': 'CSV', 'detalle': 'Texto separado por comas (.csv)', 'url': _url('csv')},
+    ]
     from configuracion.models import ConfiguracionERP
+    una_sola = len(productos) == 1 and bool(ids)
     return render(request, 'productos/inventario_imprimir.html', {
         'productos': productos,
         'total': sum((p.valor for p in productos), Decimal('0')),
@@ -359,5 +424,13 @@ def inventario_imprimir(request):
         'empresa': ConfiguracionERP.get_instance(),
         'papel': papel,
         'papel_info': PAPELES_INVENTARIO[papel],
-        'papeles': list(PAPELES_INVENTARIO.items()),
+        'vp_titulo': ('Ficha de producto — vista previa' if una_sola
+                      else 'Inventario — vista previa'),
+        'titulo_documento': 'Ficha de producto' if una_sola else 'Inventario de productos',
+        'hojas_js': {
+            'actual': papel,
+            'clave_guardado': 'erp_hoja_inventario',
+            'hojas': PAPELES_INVENTARIO,
+        },
+        'formatos': formatos,
     })

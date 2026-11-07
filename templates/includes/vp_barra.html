@@ -1,0 +1,215 @@
+{% comment %}
+Barra de la vista previa (Imprimir ▾ / Exportar ▾). Se incluye desde las páginas
+de vista previa (tickets de ventas e inventario de productos).
+
+Variables que recibe:
+  vp_titulo   : texto de la barra.
+  hojas_js    : dict {actual, clave_guardado, hojas:{clave:{etiqueta,detalle,pagina,margen,ancho,ancho_impresion,fuente}}}
+  formatos    : lista de {etiqueta, detalle, url, con_hoja}
+La página que la incluye debe tener <style id="vp-estilo-pagina"> con el @page inicial.
+{% endcomment %}
+<style>
+    .vp-barra {
+        --vp-fondo: #ffffff; --vp-texto: #1A1A2E; --vp-muted: #5A6A7E; --vp-borde: #C8D8EC;
+        --vp-acento: #0A2342; --vp-acento-texto: #ffffff; --vp-dorado: #B8860B;
+        --vp-hover: #E8F0FB; --vp-sombra: 0 6px 24px rgba(10,35,66,.18);
+        position: sticky; top: 0; z-index: 20;
+        display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1rem;
+        padding: .7rem 1.25rem;
+        background: var(--vp-fondo); color: var(--vp-texto);
+        border-bottom: 3px solid var(--vp-dorado);
+        box-shadow: 0 2px 10px rgba(10,35,66,.12);
+        font: 500 14px/1.3 'Inter','Segoe UI',system-ui,sans-serif;
+    }
+    html[data-theme="dark"] .vp-barra {
+        --vp-fondo: #142033; --vp-texto: #E2EAF4; --vp-muted: #8AA0B8; --vp-borde: #2A3F58;
+        --vp-acento: #2E5F9E; --vp-acento-texto: #ffffff; --vp-dorado: #D4AF37;
+        --vp-hover: #1E3A5F; --vp-sombra: 0 6px 24px rgba(0,0,0,.55);
+    }
+    .vp-titulo { font-weight: 700; font-size: 15px; display: flex; flex-direction: column; }
+    .vp-sub { font-weight: 400; font-size: 12px; color: var(--vp-muted); }
+    .vp-acciones { margin-left: auto; display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+    .vp-menu { position: relative; }
+
+    .vp-btn {
+        display: inline-flex; align-items: center; gap: .45rem;
+        height: 38px; padding: 0 .95rem;
+        font: inherit; font-weight: 600; cursor: pointer;
+        color: var(--vp-texto); background: transparent;
+        border: 1px solid var(--vp-borde); border-radius: 8px;
+        transition: background .15s, border-color .15s;
+    }
+    .vp-btn:hover { background: var(--vp-hover); }
+    .vp-btn:focus-visible, .vp-lista [role="menuitem"]:focus-visible {
+        outline: 2px solid var(--vp-dorado); outline-offset: 2px;
+    }
+    .vp-btn-primario { background: var(--vp-acento); border-color: var(--vp-acento); color: var(--vp-acento-texto); }
+    .vp-btn-primario:hover { background: var(--vp-acento); filter: brightness(1.12); }
+    .vp-btn svg { width: 18px; height: 18px; flex: none; }
+    .vp-btn .vp-flecha { width: 14px; height: 14px; opacity: .8; transition: transform .15s; }
+    .vp-btn[aria-expanded="true"] .vp-flecha { transform: rotate(180deg); }
+
+    .vp-lista {
+        position: absolute; right: 0; top: calc(100% + 6px); min-width: 230px;
+        margin: 0; padding: .35rem; list-style: none;
+        background: var(--vp-fondo); border: 1px solid var(--vp-borde);
+        border-radius: 10px; box-shadow: var(--vp-sombra);
+    }
+    .vp-lista[hidden] { display: none; }
+    .vp-lista [role="menuitem"] {
+        display: flex; flex-direction: column; align-items: flex-start; width: 100%;
+        padding: .5rem .7rem; border: 0; border-radius: 6px; background: transparent;
+        color: var(--vp-texto); font: inherit; text-align: left; text-decoration: none; cursor: pointer;
+    }
+    .vp-lista [role="menuitem"]:hover { background: var(--vp-hover); }
+    .vp-lista [role="menuitem"][aria-checked="true"] { box-shadow: inset 3px 0 0 var(--vp-dorado); }
+    .vp-lista small { color: var(--vp-muted); font-weight: 400; font-size: 12px; }
+    .vp-nota { padding: .45rem .7rem .3rem; color: var(--vp-muted); font-size: 12px; border-top: 1px solid var(--vp-borde); margin-top: .25rem; }
+
+    @media print { .vp-barra { display: none !important; } }
+    @media (max-width: 560px) { .vp-acciones { margin-left: 0; width: 100%; } .vp-lista { right: auto; left: 0; } }
+</style>
+
+<header class="vp-barra" role="toolbar" aria-label="Acciones de la vista previa">
+    <div class="vp-titulo">
+        <span>{{ vp_titulo }}</span>
+        <span class="vp-sub" id="vp-hoja-actual"></span>
+    </div>
+
+    <div class="vp-acciones">
+        <div class="vp-menu">
+            <button type="button" class="vp-btn vp-btn-primario" data-vp-abre="vp-menu-imprimir"
+                    aria-haspopup="menu" aria-expanded="false" aria-controls="vp-menu-imprimir">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6"/><rect x="6" y="14" width="12" height="7" rx="1"/><path d="M6 17H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/></svg>
+                Imprimir
+                <svg class="vp-flecha" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <ul class="vp-lista" id="vp-menu-imprimir" role="menu" aria-label="Elegir tamaño de hoja" hidden>
+                {% for clave, h in hojas_js.hojas.items %}
+                <li role="none">
+                    <button type="button" role="menuitem" data-vp-hoja="{{ clave }}">
+                        {{ h.etiqueta }}<small>{{ h.detalle }}</small>
+                    </button>
+                </li>
+                {% endfor %}
+                <li role="none" class="vp-nota">Al elegir una hoja se abre el cuadro de impresión. Ahí también puedes «Guardar como PDF».</li>
+            </ul>
+        </div>
+
+        <div class="vp-menu">
+            <button type="button" class="vp-btn" data-vp-abre="vp-menu-exportar"
+                    aria-haspopup="menu" aria-expanded="false" aria-controls="vp-menu-exportar">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+                Exportar
+                <svg class="vp-flecha" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <ul class="vp-lista" id="vp-menu-exportar" role="menu" aria-label="Elegir formato de exportación" hidden>
+                {% for f in formatos %}
+                <li role="none">
+                    <a role="menuitem" href="{{ f.url }}"{% if f.con_hoja %} data-vp-con-hoja="1"{% endif %}>
+                        {{ f.etiqueta }}<small>{{ f.detalle }}</small>
+                    </a>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+
+        <button type="button" class="vp-btn" onclick="window.close()">Cerrar</button>
+    </div>
+</header>
+
+{{ hojas_js|json_script:"vp-hojas" }}
+<script>
+(function () {
+    // Tema día/noche: se toma el mismo que usa el ERP (si el navegador lo permite).
+    try {
+        var tema = localStorage.getItem('erpTheme');
+        if (tema === 'dark' || tema === 'light') document.documentElement.setAttribute('data-theme', tema);
+    } catch (e) { /* sin almacenamiento: queda el tema claro */ }
+
+    var datos = JSON.parse(document.getElementById('vp-hojas').textContent);
+    var estilo = document.getElementById('vp-estilo-pagina');
+    var etiquetaHoja = document.getElementById('vp-hoja-actual');
+    var actual = datos.actual;
+
+    function aplicarHoja(clave) {
+        var h = datos.hojas[clave];
+        if (!h) return false;
+        actual = clave;
+        if (estilo) estilo.textContent = '@page { size: ' + h.pagina + '; margin: ' + h.margen + '; }';
+        var raiz = document.documentElement.style;
+        raiz.setProperty('--vp-ancho', h.ancho);
+        raiz.setProperty('--vp-ancho-print', h.ancho_impresion);
+        raiz.setProperty('--vp-fuente', h.fuente);
+        if (etiquetaHoja) etiquetaHoja.textContent = 'Hoja: ' + h.etiqueta;
+        document.querySelectorAll('[data-vp-hoja]').forEach(function (b) {
+            b.setAttribute('aria-checked', b.getAttribute('data-vp-hoja') === clave ? 'true' : 'false');
+        });
+        try { localStorage.setItem(datos.clave_guardado, clave); } catch (e) {}
+        return true;
+    }
+
+    // Hoja inicial: la última que elegiste (si sigue siendo válida) o la de por defecto.
+    var guardada = null;
+    try { guardada = localStorage.getItem(datos.clave_guardado); } catch (e) {}
+    if (!(guardada && aplicarHoja(guardada))) aplicarHoja(actual);
+
+    // ── Menús ──
+    var botones = document.querySelectorAll('[data-vp-abre]');
+    function cerrarTodos(devolverFoco) {
+        botones.forEach(function (b) {
+            var lista = document.getElementById(b.getAttribute('data-vp-abre'));
+            if (lista && !lista.hidden) {
+                lista.hidden = true;
+                b.setAttribute('aria-expanded', 'false');
+                if (devolverFoco) b.focus();
+            }
+        });
+    }
+    function items(lista) { return Array.prototype.slice.call(lista.querySelectorAll('[role="menuitem"]')); }
+
+    botones.forEach(function (b) {
+        var lista = document.getElementById(b.getAttribute('data-vp-abre'));
+        b.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            var abierto = !lista.hidden;
+            cerrarTodos(false);
+            if (!abierto) {
+                lista.hidden = false;
+                b.setAttribute('aria-expanded', 'true');
+                var primero = items(lista)[0];
+                if (primero) primero.focus();
+            }
+        });
+        lista.addEventListener('keydown', function (ev) {
+            var lis = items(lista), i = lis.indexOf(document.activeElement);
+            if (ev.key === 'ArrowDown') { ev.preventDefault(); lis[(i + 1) % lis.length].focus(); }
+            else if (ev.key === 'ArrowUp') { ev.preventDefault(); lis[(i - 1 + lis.length) % lis.length].focus(); }
+        });
+    });
+    document.addEventListener('click', function () { cerrarTodos(false); });
+    document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape') cerrarTodos(true); });
+
+    // ── Imprimir: elegir hoja → aplicar tamaño → cuadro de impresión del navegador ──
+    document.querySelectorAll('[data-vp-hoja]').forEach(function (b) {
+        b.addEventListener('click', function () {
+            var clave = b.getAttribute('data-vp-hoja');
+            cerrarTodos(false);
+            if (aplicarHoja(clave)) setTimeout(function () { window.print(); }, 150);
+        });
+    });
+
+    // ── Exportar: el PDF de tickets usa la hoja elegida ──
+    document.querySelectorAll('[data-vp-con-hoja]').forEach(function (a) {
+        a.addEventListener('click', function () {
+            var url = new URL(a.getAttribute('href'), window.location.href);
+            url.searchParams.set('papel', actual);
+            a.setAttribute('href', url.pathname + url.search);
+            cerrarTodos(false);
+        });
+    });
+    document.querySelectorAll('#vp-menu-exportar a').forEach(function (a) {
+        a.addEventListener('click', function () { setTimeout(function () { cerrarTodos(false); }, 0); });
+    });
+})();
+</script>

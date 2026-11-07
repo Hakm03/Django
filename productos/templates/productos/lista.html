@@ -9,17 +9,10 @@
         {{ page_obj.paginator.count }} producto(s)
     </span>
     {% if user.is_authenticated %}
-        <form method="get" action="{% url 'productos:exportar' %}"
-              style="display:flex;gap:.4rem;align-items:center;">
-            <select name="formato" aria-label="Formato de exportación">
-                <option value="xlsx">Excel (.xlsx)</option>
-                <option value="csv">CSV (.csv)</option>
-                <option value="pdf">PDF (.pdf)</option>
-            </select>
-            <button type="submit" class="btn-erp-primary">⬇ Exportar</button>
-        </form>
         <a href="{% url 'productos:imprimir' %}" target="_blank" rel="noopener"
-           class="btn-erp-primary">🖨 Vista previa / Imprimir</a>
+           class="btn-erp-primary">
+            <svg class="erp-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>Vista previa
+        </a>
         <a href="{% url 'productos:crear' %}" class="btn-erp-gold">
             + Nuevo producto
         </a>

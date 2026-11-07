@@ -238,8 +238,72 @@ class InventarioImprimirTest(TestCase):
             r = self.client.get(self.url)
         self.assertEqual(r.status_code, 400)
 
-    def test_lista_de_productos_tiene_el_boton(self):
+    def test_lista_de_productos_solo_tiene_vista_previa(self):
+        """Un único botón: ya no hay selector de formato ni botón Exportar."""
         self.client.login(username='inv_print', password='pass')
         r = self.client.get(reverse('productos:lista'))
         self.assertContains(r, self.url)
-        self.assertContains(r, reverse('productos:exportar'))  # sigue ahí
+        self.assertContains(r, 'Vista previa')
+        self.assertNotContains(r, 'Formato de exportación')
+
+    def test_vista_previa_ofrece_hojas_y_formatos(self):
+        self.client.login(username='inv_print', password='pass')
+        r = self.client.get(self.url)
+        for hoja in ('data-vp-hoja="a4"', 'data-vp-hoja="carta"',
+                     'data-vp-hoja="oficio"'):
+            self.assertContains(r, hoja)
+        exportar = reverse('productos:exportar')
+        for formato in ('pdf', 'xlsx', 'csv'):
+            self.assertContains(r, f'{exportar}?formato={formato}')
+
+    def test_oficio_es_papel_permitido(self):
+        self.client.login(username='inv_print', password='pass')
+        r = self.client.get(self.url, {'papel': 'oficio'})
+        self.assertContains(r, 'size: 216mm 356mm')
+
+    def test_detalle_de_producto_tiene_vista_previa_de_ese_producto(self):
+        self.client.login(username='inv_print', password='pass')
+        p = Producto.objects.get(nombre='Teclado')
+        r = self.client.get(reverse('productos:detalle', args=[p.pk]))
+        self.assertContains(r, f'{self.url}?ids={p.pk}')
+        self.assertContains(r, 'Vista previa')
+
+    def test_vista_previa_con_ids_muestra_solo_ese_producto(self):
+        self.client.login(username='inv_print', password='pass')
+        p = Producto.objects.get(nombre='Teclado')
+        r = self.client.get(self.url, {'ids': p.pk})
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'Ficha de producto')
+        self.assertContains(r, 'Teclado')
+        self.assertNotContains(r, 'Raro')
+        # Los enlaces de exportar llevan el mismo filtro.
+        self.assertContains(r, f'formato=xlsx')
+        self.assertContains(r, f'ids={p.pk}')
+
+    def test_ids_invalidos_400_e_inexistentes_404(self):
+        self.client.login(username='inv_print', password='pass')
+        for malo in ('abc', '1;2', '-1', '²', '9' * 12):
+            self.assertEqual(
+                self.client.get(self.url, {'ids': malo}).status_code, 400, malo)
+        self.assertEqual(
+            self.client.get(self.url, {'ids': 99999}).status_code, 404)
+
+    def test_exportar_xlsx_con_ids_solo_trae_ese_producto(self):
+        from io import BytesIO
+        from openpyxl import load_workbook
+        self.client.login(username='inv_print', password='pass')
+        p = Producto.objects.get(nombre='Teclado')
+        r = self.client.get(reverse('productos:exportar'),
+                            {'formato': 'xlsx', 'ids': p.pk})
+        self.assertEqual(r.status_code, 200)
+        hoja = load_workbook(BytesIO(r.content)).active
+        nombres = [c.value for c in hoja['B'][1:] if c.value]
+        self.assertEqual(nombres, ['Teclado'])
+
+    def test_exportar_csv_con_ids_invalidos_400_e_inexistentes_404(self):
+        self.client.login(username='inv_print', password='pass')
+        url = reverse('productos:exportar')
+        self.assertEqual(
+            self.client.get(url, {'formato': 'csv', 'ids': 'x'}).status_code, 400)
+        self.assertEqual(
+            self.client.get(url, {'formato': 'csv', 'ids': 99999}).status_code, 404)
