@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     'allauth.socialaccount',
     'rest_framework',
     'rest_framework.authtoken',    # ← agrega
+    'django_filters',              # W13: filtros del catálogo
     'whitenoise.runserver_nostatic',
     'clientes',
     'proveedores',
@@ -36,6 +37,7 @@ INSTALLED_APPS = [
     'ventas',
     'reportes',
     'configuracion',
+    'catalogo',                    # W13: tienda pública y carrito
     'core',                        # necesario para el comando crear_grupos
 ]
 
@@ -66,6 +68,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'catalogo.context_processors.carrito_info',   # W13
             ],
         },
     },

@@ -74,7 +74,7 @@ Al terminar W14, el estudiante será capaz de:
 
 | Herramienta | Novedad en W14 | Descripción |
 |---|---|---|
-| `stripe` (Python) | ✅ Nuevo | SDK de Stripe para crear PaymentIntents desde el backend |
+| `stripe` 16.1.0 (Python) | ✅ Nuevo | SDK de Stripe para crear PaymentIntents desde el backend |
 | Stripe.js | ✅ Nuevo | Librería JS para mostrar el formulario de tarjeta de forma segura |
 | Card Element | ✅ Nuevo | Componente Stripe para capturar datos de tarjeta (no pasan por nuestro servidor) |
 | `unittest.mock.patch` | ✅ Nuevo | Reemplaza `stripe.PaymentIntent.create` en tests |
@@ -138,14 +138,18 @@ python manage.py test tests --verbosity=0
 ### 1.1 Instalar el SDK de Stripe
 
 ```cmd
-pip install "stripe==7.8.0"
+pip install "stripe==16.1.0"
 pip freeze > requirements.txt
 ```
+
+Salida esperada: `Successfully installed stripe-16.1.0`
 
 Verificar:
 ```cmd
 python -c "import stripe; print('stripe', stripe.VERSION)"
 ```
+
+Debe mostrar `stripe 16.1.0`, y `requirements.txt` debe incluir la línea `stripe==16.1.0`.
 
 ### 1.2 Obtener claves de sandbox de Stripe
 
@@ -197,6 +201,7 @@ CheckoutView con separación → cada función tiene UNA responsabilidad:
     _calcular_totales()   → matemática del IVA
     _obtener_cliente()    → vincular User con Cliente del ERP
     _generar_numero()     → crear número de pedido único
+    armar_items()         → subtotal por producto (precio × cantidad)
     checkout()            → orquestar todo
 ```
 
@@ -248,6 +253,28 @@ def calcular_totales(carrito: dict) -> dict:
         'iva_monto': iva_monto,
         'total':     total,
     }
+
+
+def armar_items(carrito: dict) -> list:
+    """Convierte el carrito de sesión en una lista con el subtotal por línea.
+
+    Los templates de Django no pueden multiplicar (precio × cantidad),
+    por eso el cálculo se hace aquí.
+
+    Returns:
+        list de dicts con nombre, precio, cantidad y subtotal (Decimal).
+    """
+    items = []
+    for datos in carrito.values():
+        precio   = Decimal(datos['precio'])
+        cantidad = int(datos['cantidad'])
+        items.append({
+            'nombre':   datos['nombre'],
+            'precio':   precio,
+            'cantidad': cantidad,
+            'subtotal': precio * cantidad,
+        })
+    return items
 
 
 def obtener_o_crear_cliente(user) -> Cliente:
@@ -307,6 +334,7 @@ from django.contrib.auth.decorators import login_required
 
 from ventas.models import DetalleVenta, Pedido
 from .checkout_utils import (
+    armar_items,
     calcular_totales,
     generar_numero_pedido,
     obtener_o_crear_cliente,
@@ -342,6 +370,7 @@ def checkout(request):
         return redirect('catalogo:catalogo')
 
     totales         = calcular_totales(carrito)
+    items           = armar_items(carrito)   # subtotal por línea
     publishable_key = settings.STRIPE_PUBLISHABLE_KEY
 
     if request.method == 'POST':
@@ -376,6 +405,7 @@ def checkout(request):
             # ── 4. Retornar client_secret al template ──────────────────
             return render(request, 'catalogo/checkout.html', {
                 'carrito':         carrito,
+                'items':           items,
                 'totales':         totales,
                 'pedido':          pedido,
                 'client_secret':   intent.client_secret,
@@ -399,6 +429,7 @@ def checkout(request):
     # GET — solo mostrar resumen (sin PaymentIntent)
     return render(request, 'catalogo/checkout.html', {
         'carrito':         carrito,
+        'items':           items,
         'totales':         totales,
         'client_secret':   None,          # se genera en POST
         'publishable_key': publishable_key,
@@ -437,6 +468,17 @@ def pago_error(request):
 ## PARTE 4 — Template `checkout.html` con Stripe.js (25 min)
 
 ### 4.1 Crear `catalogo/templates/catalogo/checkout.html`
+
+> ⚠️ **Ubicación y nombre exactos.** Guarda este archivo (y los de la Parte 5)
+> dentro de `catalogo\templates\catalogo\`, no en `catalogo\`, y con extensión
+> `.html` (no `.htm`). Si no, Django lanza
+> `TemplateDoesNotExist at /catalogo/checkout/`. Verifica con:
+>
+> ```cmd
+> dir catalogo\templates\catalogo
+> ```
+>
+> Deben aparecer `checkout.html`, `pago_exitoso.html` y `pago_error.html`.
 
 ```html
 {% extends "base.html" %}
@@ -486,18 +528,18 @@ def pago_error(request):
         <div class="erp-card">
             <div class="erp-card-header">🛍️ Resumen de tu pedido</div>
             <table style="width:100%;border-collapse:collapse;margin-top:.5rem;">
-                {% for prod_id, datos in carrito.items %}
+                {% for item in items %}
                 <tr>
                     <td style="padding:.4rem 0;font-size:.9rem;">
-                        {{ datos.nombre }}
+                        {{ item.nombre }}
                         <span style="color:var(--clr-muted);
                                      font-size:.82rem;">
-                            × {{ datos.cantidad }}
+                            × {{ item.cantidad }}
                         </span>
                     </td>
                     <td style="text-align:right;font-weight:600;
                                font-size:.9rem;padding:.4rem 0;">
-                        ${% widthratio datos.cantidad 1 datos.precio %}
+                        ${{ item.subtotal }}
                     </td>
                 </tr>
                 {% endfor %}
@@ -651,6 +693,15 @@ def pago_error(request):
 {% endif %}
 {% endblock %}
 ```
+
+> 💡 **¿Por qué no usar `{% widthratio %}` para el subtotal?** `widthratio`
+> sirve para calcular anchos de barras (`a / b × c`), no para multiplicar.
+> Convierte su último argumento a entero, y el precio del carrito está guardado
+> como texto (`"123.45"`), así que falla con
+> `TemplateSyntaxError: widthratio final argument must be a number`. Además
+> redondea el resultado y se pierden los centavos. Los templates de Django no
+> multiplican: el subtotal se calcula en Python con `armar_items()` (Parte 2.2)
+> y la vista lo envía como `items`.
 
 ---
 
@@ -1132,7 +1183,7 @@ E:\finalizar_sesion.bat
 
 ```
 STRIPE SDK
-[ ] pip install stripe → sin errores
+[ ] pip install "stripe==16.1.0" → sin errores (stripe==16.1.0 en requirements.txt)
 [ ] STRIPE_SECRET_KEY en .env y settings.py (no hardcodeada)
 [ ] STRIPE_PUBLISHABLE_KEY en .env y settings.py
 [ ] stripe.api_key = settings.STRIPE_SECRET_KEY en views.py
@@ -1143,6 +1194,7 @@ CHECKOUT UTILS
 [ ] calcular_totales(): IVA redondeado con ROUND_HALF_UP
 [ ] obtener_o_crear_cliente(): usa user.email o genera username@erp.local
 [ ] generar_numero_pedido(): formato PED-YYYY-NNNN sin colisiones
+[ ] armar_items(): subtotal por línea = Decimal(precio) × cantidad
 
 CHECKOUTVIEW
 [ ] Sin auth → redirect /accounts/login/?next=/catalogo/checkout/
@@ -1154,6 +1206,8 @@ CHECKOUTVIEW
 
 TEMPLATES
 [ ] checkout.html: dos estados (GET sin client_secret / POST con él)
+[ ] checkout.html: recorre {% for item in items %} y muestra ${{ item.subtotal }}
+[ ] Templates en catalogo/templates/catalogo/ con extensión .html
 [ ] checkout.html: Stripe.js CDN solo cuando client_secret existe
 [ ] checkout.html: card.on('change') muestra errores en tiempo real
 [ ] checkout.html: btn.disabled=true durante el procesamiento

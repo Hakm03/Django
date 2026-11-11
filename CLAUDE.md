@@ -1,134 +1,87 @@
-# CLAUDE.md — ERP Django (tienda web + gestor de inventarios)
+# CLAUDE.md — ERP Django (Sistema Comercial + E-commerce + Automatización)
 
-> Este archivo va en la raíz del proyecto (`C:\Temp_Workspace_ERP\CLAUDE.md`).
-> Claude Code lo lee al iniciar cada sesión. Es tu "memoria" del proyecto.
+> Ubicación: `C:\Temp_Workspace_ERP\CLAUDE.md`
+> Este archivo es el contrato operativo entre el desarrollador y Claude Code.
+> Prioridad absoluta: **Integridad de datos, seguridad en producción y cero rupturas silenciosas** (el sistema se usará en negocios reales).
 
-## 1. Qué es este proyecto
+---
 
-ERP web en **Django** para gestionar clientes, proveedores, productos, ventas e
-inventario. Empezó como proyecto escolar (UTEC Celaya, guías `guides/Guia_Lab_Wxx.md`)
-pero **va a usarse en negocios reales**: prioriza seguridad, claridad y que nada
-se rompa por encima de "que funcione rápido".
+## 1. Contexto del Proyecto y Entorno Local
 
-- Repositorio: `github.com/Hakm03/Django` (público → **nunca** subir secretos).
-- Carpeta local: `C:\Temp_Workspace_ERP` · entorno virtual: `env_erp` (Windows).
-- Sistema del usuario: Windows 11 + **PowerShell**. Los comandos que le des a la
-  persona deben ser de PowerShell, no de bash.
-- La persona **está aprendiendo**: explica en español sencillo, una línea por comando,
-  sin jerga innecesaria. Cada comando que le pidas ejecutar debe llevar su porqué.
+- **Propósito:** ERP integral en Django (gestión de clientes, proveedores, productos, ventas, reportes, tienda online con Stripe, tareas asíncronas con Celery, dashboard con caché Redis y expansiones hasta W24).
+- **Repositorio:** `github.com/Hakm03/Django` (Público — **TOLERANCIA CERO a secretos expuestos**).
+- **Ruta local:** `C:\Temp_Workspace_ERP` | **Entorno virtual:** `env_erp`
+- **Sistema Operativo:** Windows 11 + **PowerShell**.
+  - *Regla de comunicación:* Todos los comandos sugeridos al usuario deben estar escritos para **PowerShell** (nunca `cmd` ni `bash`), explicando en español claro **qué hace** cada comando y **por qué** es necesario.
+- **Guías de referencia en `guides/`:** Cubre la hoja de ruta completa desde la `Guia_Lab_W12_segura.md` hasta la `Guia_Lab_W24.md`.
 
-## 2. Stack real (no lo cambies sin pedir permiso)
+---
 
-- Python 3.11 en Render (local: el de `env_erp`). Django **5.2.18**.
-- django-allauth **65.21.0** (login/registro), DRF 3.17.2 (API), django-jazzmin (admin).
-- WhiteNoise (estáticos), gunicorn, dj-database-url, psycopg2-binary.
-- django-storages + boto3 + Pillow + filetype (imágenes de productos, W11).
-- Desarrollo: SQLite. Producción: PostgreSQL en Render.
-- Apps: `clientes`, `proveedores`, `productos`, `ventas`, `reportes`, `configuracion`, `core`.
-- Comando propio: `python manage.py crear_grupos` (roles Gerente, Vendedor, Almacén).
-- Settings: `core/settings.py` = desarrollo · `core/settings_prod.py` = producción
-  (se activa con la variable `DJANGO_SETTINGS_MODULE=core.settings_prod`).
-- Plantillas globales en `templates/` (`base.html`: clases `btn-erp-primary`,
-  `btn-erp-gold`, `btn-erp-danger`, `erp-page-title`, `erp-card`, `erp-table`).
-- Tests: carpeta `tests/`. Línea base antes de W12: **123 tests OK**.
+## 2. Arquitectura y Stack Tecnológico (Hoja de Ruta W12 → W24)
 
-## 3. Comandos útiles (PowerShell, con `(env_erp)` activo)
+No instales, elimines ni cambies versiones de paquetes sin autorización explícita.
 
-```powershell
-python manage.py check
-python manage.py test tests
-python manage.py runserver
-git status
-git branch --show-current
-```
+- **Core:** Python 3.11 | Django **5.2.18** | DRF 3.17.2 | `django-allauth` 65.21.0 | `django-jazzmin`
+- **Bases de datos y Caché:**
+  - Desarrollo local: SQLite (`db.sqlite3`) + Redis local/Docker.
+  - Producción (Render): PostgreSQL (`dj-database-url`, `psycopg2-binary`) + Redis.
+  - **Aislamiento de Redis (Crítico):** Broker de Celery usa DB `/0` (`REDIS_URL`). Caché de Django usa DB `/1` (`REDIS_CACHE_URL`) para evitar que `cache.clear()` borre tareas en cola.
+- **Módulos / Apps del ERP:**
+  - Existentes: `core`, `clientes`, `proveedores`, `productos`, `ventas`, `reportes`, `configuracion`.
+  - E-commerce y Módulos Avanzados (W13+): `catalogo` (público, carrito en sesión, checkout, webhooks) y submódulos correspondientes hasta W24.
+- **Integraciones y Servicios:**
+  - Documentos (W12): `openpyxl==3.1.5` (Excel), `weasyprint==60.2` + `pydyf==0.10.0` (PDF).
+  - Filtros (W13): `django-filter==23.5` (en `INSTALLED_APPS` se registra como `django_filters`).
+  - Pagos (W14–W15): `stripe==16.1.0` (requiere `.to_dict()` en eventos webhook porque devuelve `StripeObject`).
+  - Asíncrono y Correos (W16–W18): `celery==5.3.6`, `redis==5.0.1`, `flower==2.0.1`, `django-anymail[sendgrid]==10.3`.
+- **Configuraciones y Diseño:**
+  - Settings: `core/settings.py` (desarrollo) | `core/settings_prod.py` (producción, activado por `DJANGO_SETTINGS_MODULE=core.settings_prod`).
+  - UI/Templates: `templates/base.html` (clases CSS: `btn-erp-primary`, `btn-erp-gold`, `btn-erp-danger`, `erp-page-title`, `erp-card`, `erp-table`).
 
-## 4. REGLAS INNEGOCIABLES
+---
 
-1. **Solo trabajas en la rama `w12`.** Antes de editar, ejecuta
-   `git branch --show-current`. Si no dice `w12`, detente y avisa.
-2. **Nunca** hagas `git push`, `git push --force`, `git reset --hard`, ni toques `main`.
-   Puedes hacer `git add` y `git commit` **locales** en `w12`, solo si los tests pasan.
-   Mensaje de commit: `W12 Fase N: <qué se hizo>`.
-3. **No instales ni ejecutes nada fuera del proyecto.** Prohibido por tu cuenta:
-   `pip install`, `winget`, `wsl`, `docker`, `npm`, cambios de configuración de
-   Windows, abrir puertos, tocar carpetas fuera de `C:\Temp_Workspace_ERP`.
-   Cuando algo así haga falta → aplica el **PROTOCOLO DE PARADA** (sección 5).
-   Sí puedes correr lecturas y pruebas: `git status/log/diff`, `python manage.py check`,
-   `python manage.py test tests`.
-4. **Cero secretos.** No leas ni imprimas `.env`, `db.sqlite3` ni valores de variables
-   de entorno. No escribas contraseñas reales en archivos. Las contraseñas de práctica
-   solo pueden ir en `docker-compose.yml` y deben decir que son locales.
-5. **No edites migraciones ya existentes.** Si cambias modelos: migración nueva y avísalo.
-6. **`import weasyprint` SOLO dentro de funciones**, nunca al inicio de un archivo.
-   Si falta la librería (Windows sin Docker) el ERP debe seguir funcionando y
-   el PDF responder 503 con mensaje claro.
-7. **Seguridad en exportaciones:** valida el parámetro `formato` contra una lista
-   permitida (nunca lo uses directo); exige `login_required`; en Excel marca los textos
-   como texto (`data_type = 's'`) y en CSV prefija con `'` los valores que empiecen con
-   `=`, `+`, `-`, `@` (evita inyección de fórmulas).
-8. **Saltos de línea:** `docker-entrypoint.sh` y archivos `.yml` deben ser LF, no CRLF.
-   El archivo se llama `Dockerfile` (D mayúscula; en Linux importa).
-9. **Cambios mínimos:** no refactorices ni "mejores" código que no sea de la tarea.
-   No cambies nombres de funciones, rutas ni nombres de URL que ya usan los tests.
-10. **Sé honesto.** Nunca digas "probado" si no ejecutaste la prueba. Al final de cada
-    fase informa qué verificaste y **qué no pudiste verificar**.
+## 3. REGLAS INNEGOCIABLES DE SEGURIDAD Y CONTROL
 
-## 5. PROTOCOLO DE PARADA (cuando la persona debe actuar)
+### A. Política de Ramas Aisladas por Guía (Flujo W13 → W24)
+1. **Aislamiento obligatorio:** Cada guía/semana se desarrolla en su propia rama dedicada (ej. rama `w13`, rama `w14`, etc.), ramificada siempre desde `main`.
+2. **Cero acciones remotas silenciosas:** **NUNCA** ejecutes `git push`, `git push --force`, `git merge` hacia `main`, `git reset --hard`, ni elimines ramas por tu cuenta.
+3. **Cierre de Ciclo de Guía (Estética, Utilidad y Merge):** Al terminar e implementar con éxito una guía (y pasar todos los tests):
+   - Claude presentará un **menú de propuestas de mejora estética o funcional** alineadas al gusto del desarrollador.
+   - Una vez aplicadas o descartadas las mejoras deseadas, Claude activará el **Protocolo de Parada** para que el usuario decida y ejecute la validación final y la integración (`merge`) hacia `main`.
 
-Si el siguiente paso requiere que la persona haga algo en su PC o en un panel web,
-**detente por completo** (no sigas con otra cosa) y escribe exactamente este bloque:
+### B. Evaluación de Riesgos Antes de Actuar (Semáforo de Impacto)
+Antes de ejecutar o proponer cambios que afecten áreas sensibles, **DETENTE, evalúa los riesgos en voz alta y pide confirmación (`Sí / No`)**:
+1. **Base de datos y Migraciones:** Nunca edites ni borres archivos de migración ya existentes (`0001_...`, etc.). Advierte el impacto al modificar modelos.
+2. **Entornos y Variables (`settings.py`, `settings_prod.py`, `.env`, `requirements.txt`):** Nunca leas ni expongas secretos. Advierte requerimientos de variables nuevas en Render.
+3. **Infraestructura y Docker:** Precaución con consumo en Render, réplicas de Celery Beat y saltos de línea LF obligatorios en scripts y Dockerfiles.
+
+### C. Reglas Técnicas Específicas del Proyecto (Trampas Evitadas)
+1. **WeasyPrint (PDF):** `import weasyprint` va **exclusivamente dentro de las funciones** que lo usan.
+2. **Seguridad en Exportaciones:** Exigir `@login_required`. En Excel, celdas de texto con `celda.data_type = 's'` para prevenir inyección de fórmulas.
+3. **Carrito en Sesión (W13+):** Claves de producto como `str(producto.pk)`, precios como `str(producto.precio)`. Marcar siempre `request.session.modified = True`.
+4. **Stripe (W14–W15):** Montos en centavos, verificación de firma en webhook, evento convertido con `event = event.to_dict()`, stock con `F('stock') - cantidad` e idempotencia con `pedido.estado != 'pagado'`.
+5. **Celery y Correos (W16–W18):** `@shared_task` con imports locales, idempotencia con `correo_enviado`, y uso de `locmem` / `CELERY_TASK_ALWAYS_EAGER=True` en tests.
+6. **Requirements:** Nunca uses `pip freeze > requirements.txt` en PowerShell (genera UTF-16). Edita manualmente en UTF-8.
+
+---
+
+## 4. PROTOCOLO DE PARADA Y CONFIRMACIÓN (Obligatorio)
+
+Debes detenerte por completo y mostrar este bloque cuando:
+- Se requiera cambiar de rama, hacer `git push` o `git merge` a `main`.
+- Se vaya a cerrar una guía e integrar las mejoras estéticas/funcionales seleccionadas.
+- Se vaya a crear una migración de base de datos o alterar `settings_prod.py`.
+- El usuario deba ejecutar algo fuera del código (instalar paquetes en su entorno, abrir Docker, configurar paneles web).
 
 ```text
-=== TAREA PARA TI (detente aquí) ===
-Qué vas a hacer: <una frase simple>
-Por qué: <una frase simple>
-Comandos (PowerShell, en C:\Temp_Workspace_ERP):
+=== 🛑 CONFIRMACIÓN / TAREA REQUERIDA (detente aquí) ===
+Acción: <qué se va a hacer o qué debes hacer tú>
+Impacto / Riesgos: <qué puede pasar en local, BD o Render si algo sale mal>
+Por qué es necesario: <explicación sencilla>
+Comandos (PowerShell en C:\Temp_Workspace_ERP, con env_erp activo):
   <comando 1>
   <comando 2>
-Resultado esperado: <qué debería ver>
-Si algo sale distinto: copia el mensaje completo y pégalo aquí.
-Cuando termines escribe: CONTINUAR
-====================================
-```
-
-Paradas obligatorias: instalar paquetes, instalar/abrir Docker o WSL, `docker compose`,
-crear o configurar servicios en Render, `git push`, `git merge`, correr scripts `.bat`,
-abrir el navegador a probar algo.
-
-## 6. Informe al terminar cada fase (formato fijo)
-
-1. **Archivos creados/modificados** (lista).
-2. **Tests:** comando ejecutado, número total y resultado (`OK`, `skipped=N`, fallos).
-3. **Verificado:** lo que de verdad ejecutaste.
-4. **NO verificado:** lo que no pudiste comprobar y por qué.
-5. **Siguiente paso** y si requiere una PARADA.
-
-## 7. Trampas conocidas de este proyecto (ya nos pasaron)
-
-- `requirements.txt` con un paquete **duplicado** (dos versiones de Django) rompe el
-  build de Render. Cada paquete una sola vez. No usar `pip freeze >` en PowerShell
-  (guarda en UTF-16 y rompe lectura).
-- Si falta `DJANGO_SETTINGS_MODULE=core.settings_prod` en Render → `DisallowedHost`.
-- `SECURE_PROXY_SSL_HEADER` es obligatorio en producción (sin él, bucle de redirecciones).
-- `settings_prod.py` fuerza HTTPS y SSL de base de datos: en Docker local se relaja con
-  `MODO_LOCAL=True` (esa variable **jamás** va en Render).
-- `createsuperuser --noinput` necesita `DJANGO_SUPERUSER_USERNAME/EMAIL/PASSWORD`
-  (con **doble S** en PASSWORD) y un correo válido.
-- El servicio actual de Render se configuró a mano: `render.yaml` **no se usa**.
-- El `Dockerfile` es sensible a mayúsculas en Linux; `templates/registration` no debe
-  ser un archivo vacío.
-- Al unir archivos con conflicto, nunca aceptar "ambos": duplica bloques de Django.
-
-## 8. Definición de "terminado" (por fase)
-
-- `python manage.py check` sin problemas.
-- `python manage.py test tests` termina en `OK` (en Windows sin WeasyPrint se esperan
-  pruebas `skipped`, nunca `FAILED` ni `ERROR`).
-- Diff pequeño y revisable; commit local en `w12`.
-- Informe de la sección 6 entregado.
-
-## 9. Guía de referencia
-
-La guía paso a paso (código ya probado) está en `guides/Guia_Lab_W12_segura.md`.
-Úsala como fuente de verdad: copia su código tal cual, salvo cuando el prompt pida
-una ampliación.
+Resultado esperado: <qué deberías ver exactamente>
+Si algo falla: copia el error completo y pégalo aquí.
+Escribe "CONFIRMO" o "CONTINUAR" para avanzar.
+============================================================

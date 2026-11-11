@@ -79,13 +79,13 @@ class DocumentosDisenioTest(TestCase):
     def test_sprint1_planning_existe(self):
         """El Sprint 1 Planning debe existir."""
         self.assertTrue(
-            (BASE_DIR / 'plaining' / 'sprint1_planning.md').exists(),
-            "plaining/sprint1_planning.md no encontrado"
+            (BASE_DIR / 'docs' / 'plaining' / 'sprint1_planning.md').exists(),
+            "docs/plaining/sprint1_planning.md no encontrado"
         )
 
     def test_sprint1_planning_tiene_sprint_goal(self):
         """El Sprint 1 Planning debe contener el Sprint Goal."""
-        path = BASE_DIR / 'plaining' / 'sprint1_planning.md'
+        path = BASE_DIR / 'docs' / 'plaining' / 'sprint1_planning.md'
         if path.exists():
             content = path.read_text(encoding='utf-8')
             self.assertIn(

@@ -6,7 +6,7 @@
 ---
 
 | Campo | Detalle |
-|---|---|
+|---|---|S
 | **Semana** | W15 de 24 |
 | **Espiral** | E5 — E-commerce y Pagos |
 | **Sprint Scrum** | Sprint 4 — Review + Retrospectiva |
@@ -339,6 +339,11 @@ def stripe_webhook(request) -> HttpResponse:
         logger.warning('Webhook: firma inválida — posible ataque.')
         return HttpResponse('Firma inválida.', status=400)
 
+    # stripe >= 15 devuelve StripeObject, que ya NO es un dict
+    # (no tiene .get()). Lo convertimos a dict nativo de Python.
+    if hasattr(event, 'to_dict'):
+        event = event.to_dict()
+
     # ── 2. Despachar por tipo de evento ────────────────────────────────────
     tipo = event['type']
     logger.info(f'Webhook recibido: {tipo}')
@@ -486,6 +491,18 @@ def _descontar_stock(pedido: 'Pedido') -> None:
             )
 ```
 
+> ⚠️ **Importante — `event.to_dict()` (stripe 16.x)**
+>
+> Desde stripe-python 15, `construct_event()` devuelve un `StripeObject`
+> que **ya no hereda de `dict`**: no tiene `.get()`. Sin la conversión,
+> `payment_intent.get('metadata', {})` lanza
+> `AttributeError: 'get' is a dict method, but a PaymentIntent is not a dict`
+> → Django responde **HTTP 500** → el pedido se queda en `pendiente`
+> y el stock no se descuenta.
+>
+> Los tests con `mock` no detectan el error si simulan el evento con un
+> `dict` normal; por eso en 4.1 se agrega un test con un `StripeObject` real.
+
 ---
 
 ### 2.3 ¿Qué es la expresión `F()` y por qué es necesaria?
@@ -592,16 +609,41 @@ STRIPE_WEBHOOK_SECRET=whsec_xxxxxxxxxxxxx
 
 ### 3.3 Configurar webhook en Render.com (producción)
 
-1. Ir a `dashboard.stripe.com` → Desarrolladores → Webhooks
-2. Clic en **Agregar endpoint**
-3. URL del endpoint: `https://erp-django-utec.onrender.com/catalogo/webhook/`
+0. **Obtener TU URL de Render:** Render → tu servicio → URL bajo el nombre.
+   Si el nombre ya estaba ocupado, Render agrega un sufijo
+   (ej. `https://erp-django-utec-web.onrender.com`). **No copies la URL de
+   otro compañero ni la de esta guía.**
+   Prueba: abrir `https://TU-URL.onrender.com/catalogo/webhook/` en el
+   navegador → debe responder **405** (solo acepta POST). Si responde
+   **404**, la URL está mal.
+1. Ir a `dashboard.stripe.com` y **activar Modo de prueba / Sandbox**
+   (el mismo entorno de tus claves `sk_test_` / `pk_test_`).
+   Un endpoint creado en modo *live* nunca recibe eventos de prueba.
+2. Desarrolladores → Webhooks → **Agregar endpoint**
+3. URL del endpoint: `https://TU-URL.onrender.com/catalogo/webhook/`
+   (con `https`, con `/catalogo/` y con `/` final)
 4. Seleccionar eventos:
    - `payment_intent.succeeded`
    - `payment_intent.payment_failed`
 5. Clic en **Agregar endpoint**
 6. En la página del webhook → copiar **Signing secret** (`whsec_...`)
-7. Agregarlo a las variables de entorno de Render:
+7. Agregarlo a las variables de entorno de Render y guardar (redeploy):
    `STRIPE_WEBHOOK_SECRET = whsec_xxxxxxxxxxxxxxxx`
+
+> ⚠️ El `whsec_` de `stripe listen` (3.2) **solo sirve en local**.
+> En Render usa el *Signing secret* del endpoint del Dashboard.
+
+**Verificación:** realizar un pago con `4242 4242 4242 4242` → Stripe →
+Webhooks → tu endpoint → *Entregas de eventos* → debe mostrar **200**.
+Si un evento falló, corrige y usa **Reenviar**: no hace falta volver a pagar.
+
+| Respuesta en Stripe | Causa | Solución |
+|---|---|---|
+| **404** (`x-render-routing: no-server`) | La URL no es tu servicio | Copiar la URL exacta desde Render |
+| **400** "Firma inválida" | `STRIPE_WEBHOOK_SECRET` incorrecto (p. ej. el de la CLI) | Copiar el *Signing secret* del endpoint |
+| **500** "Server Error" | Error en el código (ver nota `to_dict()` en 2.2) | Revisar *Logs* de Render |
+| Timeout | Render free estaba dormido | Stripe reintenta solo o usar **Reenviar** |
+| Sin entregas | Endpoint creado en modo *live* | Crearlo en modo de prueba / Sandbox |
 
 ---
 
@@ -798,6 +840,40 @@ class WebhookPagoFallidoTest(TestCase):
         self.assertEqual(r.status_code, 200)
         self.pedido.refresh_from_db()
         self.assertEqual(self.pedido.estado, 'cancelado')
+
+
+class WebhookStripeObjectTest(TestCase):
+    """Regresión: con stripe >= 15 el evento real es un StripeObject
+    (no un dict). Antes provocaba HTTP 500 en producción."""
+
+    def setUp(self):
+        cat         = Categoria.objects.create(nombre='Cat')
+        self.prod   = Producto.objects.create(
+            nombre='P', precio=Decimal('500.00'), stock=10, categoria=cat
+        )
+        cli         = Cliente.objects.create(nombre='C', correo='c3@t.com')
+        self.pedido = _crear_pedido_con_snapshot(cli, self.prod, cantidad=2)
+
+    @patch('catalogo.webhook_views.stripe.Webhook.construct_event')
+    def test_evento_stripe_object_real(self, mock_construct):
+        """StripeObject real → 200, pedido 'pagado' y stock descontado."""
+        import stripe
+        datos = _crear_evento('payment_intent.succeeded', self.pedido.pk)
+        datos['data']['object']['object'] = 'payment_intent'
+        datos.update({'id': 'evt_test', 'object': 'event'})
+        mock_construct.return_value = stripe.Event.construct_from(datos, 'sk_test')
+
+        r = self.client.post(
+            reverse('catalogo:webhook'),
+            data=b'{}',
+            content_type='application/json',
+            HTTP_STRIPE_SIGNATURE='t=123,v1=ok'
+        )
+        self.assertEqual(r.status_code, 200)
+        self.pedido.refresh_from_db()
+        self.prod.refresh_from_db()
+        self.assertEqual(self.pedido.estado, 'pagado')
+        self.assertEqual(self.prod.stock, 8)
 ```
 
 ### 4.2 Ejecutar los tests
@@ -815,8 +891,9 @@ test_payment_failed_cancela_pedido ... ok
 test_payment_succeeded_actualiza_estado ... ok
 test_payment_succeeded_descuenta_stock ... ok
 test_payment_succeeded_idempotente ... ok
+test_evento_stripe_object_real ... ok
 
-Ran 7 tests in X.XXXs
+Ran 8 tests in X.XXXs
 OK
 ```
 
@@ -826,7 +903,7 @@ OK
 python manage.py test tests --verbosity=0
 ```
 
-**Resultado esperado:** `Ran 147 tests in X.XXXs · OK` (139 + 7–8)
+**Resultado esperado:** `Ran 147 tests in X.XXXs · OK` (139 + 8)
 
 ### COMMIT PARCIAL
 
@@ -1106,11 +1183,14 @@ STRIPE CLI (verificación local)
 [ ] Flujo completo: 4242 → succeeded → Pedido 'pagado' → stock decrementado
 
 PRODUCCIÓN (Render)
-[ ] Webhook configurado en Stripe Dashboard con URL de Render
-[ ] STRIPE_WEBHOOK_SECRET configurado en variables de Render
+[ ] URL propia de Render verificada (GET /catalogo/webhook/ → 405, no 404)
+[ ] Webhook creado en Stripe en MODO DE PRUEBA / Sandbox con TU URL
+[ ] STRIPE_WEBHOOK_SECRET = Signing secret del Dashboard (no el de la CLI)
+[ ] Entregas de eventos en Stripe → 200 · Pedido 'pagado' · stock decrementado
 
 TESTS
-[ ] test tests.test_w15_webhooks → ≥ 7/7 OK
+[ ] event.to_dict() después de construct_event() (stripe 16.x)
+[ ] test tests.test_w15_webhooks → 8/8 OK (incluye test StripeObject real)
 [ ] test tests → 147/147 OK acumulados
 [ ] test firma inválida → 400
 [ ] test GET rechazado → 405
@@ -1206,6 +1286,45 @@ con Redis como broker.
 > ¿Qué pasaría si el mismo webhook llega DOS veces a Stripe
 > (por un timeout de red)? ¿Cómo garantiza el código actual
 > que el stock solo se descuenta una vez?"
+
+---
+
+## NOTAS — Observaciones de verificación en producción (10/11/2026)
+
+Al probar W15 en Render con Stripe en **modo de prueba**, el pago aparecía
+en Stripe como *"Se efectuó correctamente"*, pero en Django el pedido seguía
+en **"Pendiente de pago"** y el inventario no disminuía. Se encontraron
+dos causas, una tras otra:
+
+**Observación 1 — URL del webhook incorrecta (Stripe recibía 404).**
+La versión anterior de 3.3 indicaba una URL fija
+(`https://erp-django-utec.onrender.com/...`). Esa URL no corresponde a
+ningún servicio (`x-render-routing: no-server`): Render agrega un sufijo
+cuando el nombre está ocupado. El evento nunca llegaba a Django.
+*Corrección:* 3.3 ahora indica usar la URL propia de cada servicio,
+verificarla con un GET (405) y crear el endpoint en modo de prueba /
+Sandbox con el *Signing secret* del Dashboard.
+
+**Observación 2 — HTTP 500 al procesar el evento (stripe 16.1.0).**
+Con la URL correcta, Stripe recibía **500 Server Error**. La firma sí era
+válida (si no, sería 400). La causa: en stripe-python ≥ 15, el evento
+es un `StripeObject` que no hereda de `dict`, y
+`payment_intent.get('metadata', {})` lanzaba `AttributeError`.
+Los tests no lo detectaban porque simulaban el evento con un `dict` normal.
+*Corrección:* `event = event.to_dict()` después de `construct_event()`
+(2.2) y nuevo test `WebhookStripeObjectTest` con un `StripeObject` real
+(4.1). Sin la corrección, el test falla; con ella, pasa.
+
+**Notas aclaratorias:**
+- En la línea de tiempo de Stripe, *"Pago autorizado"* es un paso normal
+  (autorizado → efectuado). No requiere configuración adicional:
+  el `PaymentIntent` usa captura automática.
+- Para los pagos que fallaron antes de la corrección, después del
+  redeploy usar **Reenviar** en Stripe → Webhooks → Entregas de eventos.
+  El pedido pasa a `pagado` y se descuenta el stock sin volver a pagar.
+- **Lección:** un *mock* debe parecerse al objeto real. Si la librería
+  cambia de versión, los tests con `dict` simples pueden pasar aunque
+  producción falle.
 
 ---
 
