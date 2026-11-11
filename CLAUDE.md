@@ -31,7 +31,7 @@ No instales, elimines ni cambies versiones de paquetes sin autorización explíc
   - E-commerce y Módulos Avanzados (W13+): `catalogo` (público, carrito en sesión, checkout, webhooks) y submódulos correspondientes hasta W24.
 - **Integraciones y Servicios:**
   - Documentos (W12): `openpyxl==3.1.5` (Excel), `weasyprint==60.2` + `pydyf==0.10.0` (PDF).
-  - Filtros (W13): `django-filter==23.5` (en `INSTALLED_APPS` se registra como `django_filters`).
+  - Filtros (W13): `django-filter==25.1` (en `INSTALLED_APPS` se registra como `django_filters`).
   - Pagos (W14–W15): `stripe==16.1.0` (requiere `.to_dict()` en eventos webhook porque devuelve `StripeObject`).
   - Asíncrono y Correos (W16–W18): `celery==5.3.6`, `redis==5.0.1`, `flower==2.0.1`, `django-anymail[sendgrid]==10.3`.
 - **Configuraciones y Diseño:**
