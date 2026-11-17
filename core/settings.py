@@ -125,6 +125,13 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # core/settings.py — agregar al final del archivo
 
+# ── STRIPE (Pasarela de pago) — W14 ───────────────────────────────────────
+# Default vacío a propósito: si falta la variable, el checkout lo detecta y
+# muestra un error controlado en lugar de intentar cobrar con una clave falsa.
+STRIPE_SECRET_KEY      = env('STRIPE_SECRET_KEY',      default='')
+STRIPE_PUBLISHABLE_KEY = env('STRIPE_PUBLISHABLE_KEY', default='')
+STRIPE_WEBHOOK_SECRET  = env('STRIPE_WEBHOOK_SECRET',  default='')   # se usa en W15
+
 # ── JAZZMIN — Personalización del admin con Fable 5 AzulERP ───────────────
 JAZZMIN_SETTINGS = {
     # Identidad
