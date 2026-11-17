@@ -25,6 +25,16 @@ services:
           property: connectionString
       - key: PYTHON_VERSION
         value: "3.11.9"
+      # Stripe (W14+) — sync:false = Render NO guarda el valor en este archivo;
+      # te lo pedirá en el panel la primera vez (o lo agregas en Environment).
+      # Nota: este servicio se configuró a mano en Render y NO usa render.yaml,
+      # pero se documenta aquí por si algún día se usa Infrastructure as Code.
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET      # se usa a partir de W15
+        sync: false
 
 databases:
   - name: erp-django-db

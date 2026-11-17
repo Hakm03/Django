@@ -13,8 +13,9 @@
 - **Ruta local:** `C:\Temp_Workspace_ERP` | **Entorno virtual:** `env_erp`
 - **Sistema Operativo:** Windows 11 + **PowerShell**.
   - *Regla de comunicación:* Todos los comandos sugeridos al usuario deben estar escritos para **PowerShell** (nunca `cmd` ni `bash`), explicando en español claro **qué hace** cada comando y **por qué** es necesario.
-- **Guías de referencia en `guides/`:** Cubre la hoja de ruta completa desde la `Guia_Lab_W12_segura.md` hasta la `Guia_Lab_W24.md`.
-
+- **Guías de referencia en `docs/guides/`:** Cubre la hoja de ruta completa desde la `Guia_Lab_W12_segura.md` hasta la `Guia_Lab_W24.md`.
+- **Git portable**: está en la USB (normalmente E:) en ...\Git_portable\cmd\git.exe.
+Antes de usar git: $g = (Get-ChildItem E:\ -Recurse -Filter git.exe -Depth 4 | ? FullName -like '*\cmd\git.exe' | select -First 1); & $g.FullName <comando>
 ---
 
 ## 2. Arquitectura y Stack Tecnológico (Hoja de Ruta W12 → W24)

@@ -42,6 +42,12 @@ services:
       DJANGO_SUPERUSER_USERNAME:  admin
       DJANGO_SUPERUSER_EMAIL:     admin@erp.local
       DJANGO_SUPERUSER_PASSWORD:  admin-local-123
+      # Stripe (W14+) — ${VAR} toma el valor de TU .env local (docker compose
+      # lo lee automáticamente porque está junto a este archivo). Así nunca
+      # queda una clave real escrita aquí. Si tu .env no las tiene, quedan
+      # vacías y el checkout muestra "no disponible" (sin romper el resto).
+      STRIPE_SECRET_KEY:          ${STRIPE_SECRET_KEY:-}
+      STRIPE_PUBLISHABLE_KEY:     ${STRIPE_PUBLISHABLE_KEY:-}
 
 volumes:
   postgres_data:
