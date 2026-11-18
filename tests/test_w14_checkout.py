@@ -222,6 +222,19 @@ class PagoExitosoTest(TestCase):
             status=status, amount=amount,
             metadata={'pedido_id': str(pedido_id or self.pedido.pk)})
 
+    @patch('catalogo.views.stripe.PaymentIntent.retrieve')
+    def test_intent_stripe_object_real_no_da_500(self, mock_get):
+        """Regresión (stripe >= 15): retrieve() devuelve un StripeObject, no
+        un dict ni un MagicMock. Antes: metadata.get() -> AttributeError -> 500."""
+        mock_get.return_value = stripe.PaymentIntent.construct_from({
+            'id': 'pi_test_1', 'object': 'payment_intent',
+            'status': 'succeeded', 'amount': 11600,
+            'metadata': {'pedido_id': str(self.pedido.pk)},
+        }, 'sk_test_fake')
+        self._autorizar()
+        self.assertEqual(self.client.get(self.url).status_code, 200)
+        self.assertEqual(self.client.session.get('carrito', {}), {})
+
     def test_sin_login_redirige_a_login(self):
         r = self.client.get(self.url)
         self.assertEqual(r.status_code, 302)

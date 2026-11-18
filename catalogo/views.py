@@ -380,7 +380,10 @@ def _pago_verificado(request, pedido) -> bool:
         logger.exception('Verificación de pago falló (pedido=%s)', pedido.pk)
         return False
 
+    # stripe >= 15: metadata es un StripeObject (sin .get()), no un dict.
     metadata = getattr(intent, 'metadata', None) or {}
+    if not isinstance(metadata, dict):
+        metadata = metadata.to_dict()
     return (
         intent.status in ('succeeded', 'processing')
         and str(metadata.get('pedido_id')) == str(pedido.pk)
