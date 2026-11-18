@@ -54,7 +54,8 @@ No instales, elimines ni cambies versiones de paquetes sin autorización explíc
 Antes de ejecutar o proponer cambios que afecten áreas sensibles, **DETENTE, evalúa los riesgos en voz alta y pide confirmación (`Sí / No`)**:
 1. **Base de datos y Migraciones:** Nunca edites ni borres archivos de migración ya existentes (`0001_...`, etc.). Advierte el impacto al modificar modelos.
 2. **Entornos y Variables (`settings.py`, `settings_prod.py`, `.env`, `requirements.txt`):** Nunca leas ni expongas secretos. Advierte requerimientos de variables nuevas en Render.
-3. **Infraestructura y Docker:** Precaución con consumo en Render, réplicas de Celery Beat y saltos de línea LF obligatorios en scripts y Dockerfiles.
+3. **`render.yaml` (Render):** Si es necesario modificarlo, **avisa antes y pide confirmación (`Sí / No`)** explicando qué línea cambia y cómo afecta al despliegue. Con confirmación puedes editarlo. Nunca lo cambies en silencio.
+4. **Infraestructura y Docker:** Precaución con consumo en Render, réplicas de Celery Beat y saltos de línea LF obligatorios en scripts y Dockerfiles.
 
 ### C. Reglas Técnicas Específicas del Proyecto (Trampas Evitadas)
 1. **WeasyPrint (PDF):** `import weasyprint` va **exclusivamente dentro de las funciones** que lo usan.
