@@ -3,6 +3,7 @@
 from django.urls import path
 
 from . import views
+from .webhook_views import stripe_webhook
 
 app_name = 'catalogo'
 
@@ -25,4 +26,7 @@ urlpatterns = [
     path('pago-exitoso/<int:pedido_id>/',
          views.pago_exitoso, name='pago_exitoso'),
     path('pago-error/', views.pago_error, name='pago_error'),
+
+    # Webhook de Stripe (W15)
+    path('webhook/', stripe_webhook, name='webhook'),
 ]
