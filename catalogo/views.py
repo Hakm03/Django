@@ -291,7 +291,19 @@ def checkout(request):
         firma  = firma_carrito(carrito)
         pedido = _pedido_reutilizable(request, cliente, totales['total'], firma)
         if pedido is None:
-            pedido   = crear_pedido_pendiente(cliente, totales['total'])
+            # Snapshot del carrito: pago_exitoso() vacía la sesión, así que el
+            # webhook (W15) necesita esta copia para saber qué stock descontar.
+            snapshot = [
+                {
+                    'producto_id': int(prod_id),
+                    'nombre':      datos['nombre'],
+                    'cantidad':    int(datos['cantidad']),
+                    'precio':      str(datos['precio']),
+                }
+                for prod_id, datos in carrito.items()
+            ]
+            pedido   = crear_pedido_pendiente(
+                cliente, totales['total'], items_snapshot=snapshot)
             es_nuevo = True
         _recordar_pedido(request, pedido, firma)
 
