@@ -33,14 +33,16 @@
 > | API | `send_mail()`, `EmailMessage` de Django | `sg.client.mail.send(message)` |
 > | Portabilidad | Cambiar a Mailgun/Postmark con 1 línea | Reescribir toda la integración |
 > | Tests | `mail.outbox` de Django | Mocking manual del SDK |
-> | Aprendizaje | Reutiliza lo que Django ya enseña | API específica de Stripe |
+> | Aprendizaje | Reutiliza lo que Django ya enseña | API específica de SendGrid |
 >
 > Usaremos **`django-anymail`** porque aprovecha la API estándar de
 > Django y hace los tests triviales con `mail.outbox`.
 >
 > **¿Dos correos de confirmación para el mismo pedido?**
-> Sí, es posible: `pago_exitoso()` llama `.delay()` Y el webhook
-> también lo llama. La solución es el campo `correo_enviado` en `Pedido`:
+> Sí, es posible aunque desde W16 el **webhook es el único** que llama
+> `.delay()` (`pago_exitoso()` ya no encola): Stripe **reintenta** el
+> webhook si no recibe 200 a tiempo, y Celery **reintenta** la tarea si
+> falla. La solución es el campo `correo_enviado` en `Pedido`:
 > la tarea verifica si ya se envió y aborta si es así. Este campo
 > también sirve como registro de auditoría.
 
@@ -82,9 +84,10 @@ Al terminar W17, el estudiante será capaz de:
 | Parte 3 | Templates HTML de correo | 25 min |
 | Parte 4 | Actualizar `enviar_confirmacion_pedido` | 25 min |
 | Parte 5 | Actualizar `verificar_stock_bajo` | 15 min |
-| Parte 6 | Tests W17 (8 pruebas con `mail.outbox`) | 25 min |
+| Parte 6 | Tests W17 (12 pruebas con `mail.outbox`) | 25 min |
+| Parte 7 | Despliegue en Render + prueba real con SendGrid | 15 min |
 | Cierre | Commit · `finalizar_sesion.bat` · hilo → W18 | 10 min |
-| Buffer | | 20 min |
+| Buffer | | 5 min |
 | **Total** | | **180 min** |
 
 ---
@@ -117,7 +120,17 @@ python manage.py check
 python manage.py test tests --verbosity=0
 ```
 
-**Resultado esperado:** `System check identified no issues` · `Ran 155 tests … OK`
+**Resultado esperado:** `System check identified no issues` · `Ran 147 tests`
+
+> ⚠️ **Nota:** la suite acumulada real al cierre de W16 es de **147 pruebas**
+> (no 155). En el equipo de laboratorio aparecen **4 fallas y 7 errores
+> previos** en W01/W02/W03/W08/W12, ajenos a W16–W17. Lo que debe estar
+> en verde es W13–W16: `python manage.py test tests.test_w16_celery`.
+
+> 🐳 **Sin Docker Desktop:** igual que en W16, en el laboratorio NO hay
+> Redis. Con `REDIS_URL` vacía las tareas se ejecutan en modo **EAGER**
+> (en el mismo proceso). Todo W17 se prueba así; Redis y el worker
+> solo existen en Render.
 
 ---
 
@@ -127,8 +140,14 @@ python manage.py test tests --verbosity=0
 
 ```cmd
 pip install "django-anymail[sendgrid]==10.3"
-pip freeze > requirements.txt
 ```
+
+Agregar **a mano** la línea `django-anymail==10.3` en `requirements.txt`
+(en orden alfabético, después de `django-allauth`).
+
+> ⚠️ **No usar `pip freeze > requirements.txt` en PowerShell:** genera el
+> archivo en UTF-16 y el `pip install -r` de Render falla (le pasó a W16).
+> Si se quiere regenerar, hacerlo desde **cmd** (`cmd /c "pip freeze > requirements.txt"`).
 
 Verificar:
 ```cmd
@@ -138,70 +157,112 @@ python -c "import anymail; print('anymail OK')"
 ### 1.2 Obtener API Key de SendGrid
 
 1. Ir a `https://app.sendgrid.com` → crear cuenta gratuita
-   (100 correos/día en el plan gratuito)
-2. Configuración → API Keys → Create API Key
+   (100 correos/día en el plan gratuito). SendGrid exige activar
+   **2FA** en la cuenta.
+2. Settings → API Keys → Create API Key
 3. Nombre: `erp-django-utec`
-4. Permisos: **Mail Send** (solo los necesarios)
-5. Copiar la clave: `SG.xxxxxxxxxxxxx`
+4. Permisos: **Restricted Access → Mail Send** (solo lo necesario)
+5. Copiar la clave: `SG.xxxxxxxxxxxxx` (solo se muestra una vez)
+
+### 1.2-bis Verificar el remitente (Sender Identity) — OBLIGATORIO
+
+SendGrid **rechaza (HTTP 403)** cualquier correo cuyo remitente no esté
+verificado: *"The from address does not match a verified Sender Identity"*.
+
+1. Settings → **Sender Authentication** → **Verify a Single Sender**
+2. Capturar tu correo real (p. ej. tu Gmail) y nombre `ERP Django`
+3. Abrir el correo de SendGrid y pulsar **Verify Single Sender**
+4. Ese correo exacto será `DEFAULT_FROM_EMAIL`
+
+> ⚠️ **From ≠ Reply-To.** El formulario del Single Sender pide dos correos:
+> **From Email Address** (el remitente, el que se verifica) y **Reply To**
+> (a dónde llegan las respuestas). `DEFAULT_FROM_EMAIL` debe ser el **From**.
+> Poner el Reply-To (p. ej. `admin-no-reply@tu-servicio.onrender.com`)
+> provoca el 403 aunque el Sender aparezca como verificado.
+
+> `noreply@tu-dominio.com` solo funciona si eres dueño del dominio y lo
+> autenticas (Domain Authentication con registros DNS). Para el laboratorio
+> usa Single Sender. Los correos desde un remitente `@gmail.com` pueden
+> caer en **Spam** (Gmail no autoriza a SendGrid a firmar por él): revisa
+> esa carpeta en las pruebas.
 
 ### 1.3 Agregar variables al `.env`
 
 ```bash
-# .env — agregar:
+# .env — agregar (el .env NUNCA se sube a Git):
 SENDGRID_API_KEY=SG.TU_API_KEY_AQUI
-DEFAULT_FROM_EMAIL=noreply@tu-dominio.com
+DEFAULT_FROM_EMAIL=ERP Django <tu-sender-verificado@gmail.com>
 ADMIN_EMAIL=tu-correo-admin@gmail.com
 ```
 
+> En el laboratorio el correo se imprime en la terminal (backend de
+> consola): la API Key solo se usa en Render.
+
 ### 1.4 Configurar en `core/settings.py`
 
-Agregar al final del archivo, antes de `JAZZMIN_SETTINGS`:
+Agregar **justo después del bloque `STRIPE`** (antes de `JAZZMIN_SETTINGS`):
 
 ```python
-# core/settings.py — configuración de correo electrónico
-
-# ── CORREO ELECTRÓNICO ────────────────────────────────────────────────────
-# En desarrollo: usar el backend de consola (imprime en terminal)
-# En producción: anymail con SendGrid
+# ── CORREO ELECTRÓNICO (W17) ──────────────────────────────────────────────
+# En desarrollo: backend de consola (imprime el correo en la terminal).
+# En producción: settings_prod.py activa anymail + SendGrid si existe
+#                SENDGRID_API_KEY.
+# En tests: Django usa SIEMPRE locmem (mail.outbox), sin importar esto.
 EMAIL_BACKEND = env(
     'EMAIL_BACKEND',
     default='django.core.mail.backends.console.EmailBackend'
 )
 
-# Dirección del remitente visible en los correos
+# Remitente visible. En SendGrid DEBE ser un "Sender" verificado
+# (Settings → Sender Authentication); si no, SendGrid responde 403.
 DEFAULT_FROM_EMAIL = env(
     'DEFAULT_FROM_EMAIL',
     default='ERP Django <noreply@erp-django.com>'
 )
+# Remitente de los correos de error que Django envía a ADMINS
+# (por defecto 'root@localhost', que SendGrid rechazaría).
+SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
-# Nombre del asunto con prefijo del sistema
+# Prefijo SOLO para mail_admins()/mail_managers() (errores del sistema);
+# no afecta a send_mail() ni a EmailMultiAlternatives.
 EMAIL_SUBJECT_PREFIX = '[ERP Django] '
 
-# Administradores que reciben alertas del sistema
+# Administradores que reciben alertas del sistema (stock bajo, errores 500)
 ADMINS = [
     ('Admin ERP', env('ADMIN_EMAIL', default='admin@erp-django.com')),
 ]
 
-# Configuración de django-anymail (SendGrid)
+# URL pública del sitio para los enlaces de los correos (las tareas
+# Celery no tienen request → no hay build_absolute_uri()).
+# Render define RENDER_EXTERNAL_URL automáticamente en cada servicio.
+SITE_URL = env(
+    'SITE_URL',
+    default=env('RENDER_EXTERNAL_URL', default='http://127.0.0.1:8000')
+).rstrip('/')
+
+# django-anymail (SendGrid)
 SENDGRID_API_KEY = env('SENDGRID_API_KEY', default='')
 ANYMAIL = {
     'SENDGRID_API_KEY': SENDGRID_API_KEY,
-    # Reintentar envíos fallidos automáticamente
-    'SEND_DEFAULTS': {
-        'esp_extra': {'ip_pool_name': 'transactional'},
-    },
 }
 ```
 
+> ⚠️ **No agregar** `'esp_extra': {'ip_pool_name': 'transactional'}`
+> (versión anterior de esta guía): los IP Pools solo existen con IP
+> dedicada (planes de pago) y SendGrid rechaza el envío en la cuenta
+> gratuita. Tampoco "reintenta" nada: los reintentos los hace Celery.
+
 ### 1.5 Actualizar `core/settings_prod.py`
 
-En producción, usar el backend real de SendGrid:
+En producción, usar SendGrid **solo si la API Key existe** (así un
+despliegue sin la variable no rompe el envío: el correo queda en los Logs):
 
 ```python
-# core/settings_prod.py — agregar:
+# core/settings_prod.py — agregar después del bloque LOGGING:
 
-# En producción: usar SendGrid via anymail
-EMAIL_BACKEND = 'anymail.backends.sendgrid.EmailBackend'
+# ── CORREO (W17): SendGrid vía django-anymail ─────────────────────────────
+if SENDGRID_API_KEY:
+    EMAIL_BACKEND = 'anymail.backends.sendgrid.EmailBackend'
 ```
 
 ### 1.6 Agregar `anymail` a `INSTALLED_APPS`
@@ -236,7 +297,7 @@ Debe imprimirse el correo en la terminal (backend de consola).
 ```
 Escenario sin correo_enviado:
   1. Pago confirmado → webhook dispara tarea
-  2. pago_exitoso() también dispara la misma tarea
+  2. Stripe reenvía el webhook (timeout) o Celery reintenta la tarea
   3. La tarea se ejecuta DOS veces
   4. Cliente recibe DOS correos de confirmación ← ❌ mala experiencia
 
@@ -255,6 +316,7 @@ Abrir `ventas/models.py` y agregar en la clase `Pedido`:
 ```python
 # ventas/models.py — en Pedido, después de items_snapshot:
 
+    # W17: idempotencia del correo de confirmación
     correo_enviado = models.BooleanField(
         default=False,
         verbose_name='Correo de confirmación enviado',
@@ -301,6 +363,15 @@ mkdir templates\emails
 
 ### 3.2 `templates/emails/confirmacion_pedido.html`
 
+> ⚠️ **Correcciones respecto a la versión anterior de la guía:**
+> - El subtotal usa `{{ item.subtotal }}` (calculado en la tarea con
+>   `Decimal`). `{% widthratio %}` redondea a entero: `99.50 × 3` mostraba
+>   `$298` en lugar de `$298.50`.
+> - El botón lleva a la tienda (`url_tienda`). El ERP no tiene una página
+>   pública de "detalle de pedido": `/ventas/<pk>/` es el detalle de una
+>   **Venta** interna (requiere login y es otro modelo) y
+>   `/catalogo/pago-exitoso/<id>/` **vacía el carrito** de quien la abra.
+
 ```html
 <!DOCTYPE html>
 <html lang="es">
@@ -309,7 +380,8 @@ mkdir templates\emails
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Confirmación de pedido {{ pedido.numero_pedido }}</title>
     <style>
-        /* CSS inline — mayor compatibilidad con clientes de correo */
+        /* Estilos en <head>: la mayoría de clientes los respetan; los
+           datos críticos además llevan style="" en línea. */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: Arial, Helvetica, sans-serif;
@@ -471,15 +543,13 @@ mkdir templates\emails
                     <td>{{ item.nombre }}</td>
                     <td class="num">${{ item.precio }}</td>
                     <td class="num">{{ item.cantidad }}</td>
-                    <td class="num">
-                        ${% widthratio item.cantidad 1 item.precio %}
-                    </td>
+                    <td class="num">${{ item.subtotal }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
             <tfoot>
                 <tr class="total-row">
-                    <td colspan="3">Total:</td>
+                    <td colspan="3">Total (IVA incluido):</td>
                     <td class="total-valor">${{ pedido.total_pagado }}</td>
                 </tr>
             </tfoot>
@@ -488,13 +558,13 @@ mkdir templates\emails
 
         <!-- Botón CTA -->
         <div class="cta-section">
-            <a href="{{ url_pedido }}" class="cta-btn">
-                Ver detalle del pedido
+            <a href="{{ url_tienda }}" class="cta-btn">
+                Volver a la tienda
             </a>
         </div>
 
         <p style="color:#5A6A7E;font-size:13px;margin-top:8px;">
-            Si tienes preguntas, responde a este correo.<br>
+            Si tienes preguntas, contáctanos.<br>
             Equipo de {{ config.nombre_empresa }}
         </p>
     </div>
@@ -633,7 +703,7 @@ mkdir templates\emails
     </div>
 
     <div class="footer">
-        <p>Generado por ERP Django · Sistema de alertas automáticas</p>
+        <p>Generado por {{ config.nombre_empresa }} · Sistema de alertas automáticas</p>
     </div>
 
 </div>
@@ -648,7 +718,7 @@ mkdir templates\emails
 Crear `templates/emails/confirmacion_pedido.txt`:
 
 ```
-¡Pago confirmado! — {{ config.nombre_empresa }}
+{% autoescape off %}¡Pago confirmado! — {{ config.nombre_empresa }}
 
 Hola, {{ pedido.cliente.nombre }}:
 
@@ -657,31 +727,35 @@ Tu pedido ha sido confirmado.
 PEDIDO: {{ pedido.numero_pedido }}
 TOTAL:  ${{ pedido.total_pagado }}
 FECHA:  {{ pedido.fecha_pedido|date:"d/m/Y H:i" }}
-
 {% for item in items %}
-- {{ item.nombre }} × {{ item.cantidad }} = ${{ item.precio }}
-{% endfor %}
+- {{ item.nombre }} × {{ item.cantidad }} = ${{ item.subtotal }}{% endfor %}
 
-Ver tu pedido: {{ url_pedido }}
+Visita nuestra tienda: {{ url_tienda }}
 
 Gracias por tu compra.
 {{ config.nombre_empresa }}
+{% endautoescape %}
 ```
 
 Crear `templates/emails/alerta_stock.txt`:
 
 ```
-⚠️ ALERTA DE STOCK BAJO — ERP Django
+{% autoescape off %}⚠️ ALERTA DE STOCK BAJO — {{ config.nombre_empresa }}
 Fecha: {{ fecha }}
 
 {{ total_productos }} producto(s) con stock < {{ umbral }} unidades:
-
 {% for prod in productos_bajos %}
-- {{ prod.nombre }}: {{ prod.stock }} unidades
-{% endfor %}
+- {{ prod.nombre }}: {{ prod.stock }} unidades ({{ prod.categoria__nombre }}){% endfor %}
 
 Administración: {{ url_admin }}
+{% endautoescape %}
 ```
+
+> 💡 **¿Por qué `{% autoescape off %}` en los `.txt`?** `render_to_string`
+> escapa HTML siempre, sin importar la extensión. Sin esta etiqueta, un
+> cliente llamado `O'Brien & Hijos` aparecería como `O&#x27;Brien &amp; Hijos`
+> en la versión de texto plano. En los `.html` el escape SÍ se mantiene
+> (protege contra inyección de HTML).
 
 ---
 
@@ -693,22 +767,64 @@ Administración: {{ url_admin }}
 # ventas/tasks.py
 """Tareas asíncronas de la app ventas — W17.
 
-W17 implementa el envío real de correos con django-anymail + SendGrid.
+W16: estructura base (solo log).
+W17: envío real de correos con django-anymail + SendGrid.
+W18: tareas programadas con Celery Beat.
 
 Idempotencia:
     Pedido.correo_enviado=True previene envíos duplicados si la tarea
-    se llama más de una vez para el mismo pedido.
+    se llama más de una vez para el mismo pedido (p. ej. Stripe reenvía
+    el webhook o Celery reintenta).
+
+Uso:
+    # Desde una vista o el webhook (asíncrono):
+    enviar_confirmacion_pedido.delay(pedido_id)
+
+    # Depuración en el shell (síncrono):
+    >>> from ventas.tasks import enviar_confirmacion_pedido
+    >>> enviar_confirmacion_pedido.apply(args=[1]).get()
 """
 import logging
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from celery import shared_task
 from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
+from django.urls import reverse
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+
+def _url_absoluta(nombre_url: str) -> str:
+    """Construye una URL absoluta sin request (las tareas no tienen request).
+
+    Usa settings.SITE_URL (en Render: RENDER_EXTERNAL_URL automática).
+    """
+    return f'{settings.SITE_URL}{reverse(nombre_url)}'
+
+
+def _items_con_subtotal(items_snapshot: list) -> list:
+    """Agrega 'subtotal' (precio × cantidad, Decimal) a cada item del snapshot.
+
+    Se calcula en Python porque {% widthratio %} redondea a entero
+    y perdería los centavos.
+    """
+    items = []
+    for item in items_snapshot or []:
+        try:
+            precio   = Decimal(str(item.get('precio', '0')))
+            cantidad = int(item.get('cantidad', 0))
+        except (InvalidOperation, TypeError, ValueError):
+            precio, cantidad = Decimal('0.00'), 0
+        items.append({
+            **item,
+            'precio':   precio.quantize(Decimal('0.01')),
+            'cantidad': cantidad,
+            'subtotal': (precio * cantidad).quantize(Decimal('0.01')),
+        })
+    return items
 
 
 @shared_task(
@@ -722,7 +838,7 @@ def enviar_confirmacion_pedido(self, pedido_id: int) -> dict:
 
     Garantías:
         - Idempotente: si correo_enviado=True, aborta sin error.
-        - Retry automático hasta 3 veces en caso de fallo de SendGrid.
+        - Retry automático hasta 3 veces si SendGrid falla.
 
     Args:
         pedido_id: ID del Pedido confirmado.
@@ -736,10 +852,12 @@ def enviar_confirmacion_pedido(self, pedido_id: int) -> dict:
     try:
         pedido = Pedido.objects.select_related('cliente').get(pk=pedido_id)
     except Pedido.DoesNotExist:
-        logger.error(
-            f'[correo_confirmacion] Pedido {pedido_id} no existe.'
-        )
-        return {'estado': 'error', 'razon': 'Pedido no encontrado'}
+        logger.error(f'[correo_confirmacion] Pedido {pedido_id} no existe.')
+        return {
+            'estado':    'error',
+            'pedido_id': pedido_id,
+            'razon':     'Pedido no encontrado',
+        }
 
     # ── Verificación de idempotencia ────────────────────────────────────
     if pedido.correo_enviado:
@@ -755,70 +873,54 @@ def enviar_confirmacion_pedido(self, pedido_id: int) -> dict:
 
     config = ConfiguracionERP.get_instance()
 
-    # ── Construir contexto del correo ───────────────────────────────────
-    items = pedido.items_snapshot or []
-    url_pedido = (
-        f"https://erp-django-utec.onrender.com"
-        f"/ventas/{pedido.pk}/"
-    )
-
+    # ── Contexto del correo ─────────────────────────────────────────────
     contexto = {
         'pedido':     pedido,
         'config':     config,
-        'items':      items,
-        'url_pedido': url_pedido,
+        'items':      _items_con_subtotal(pedido.items_snapshot),
+        'url_tienda': _url_absoluta('catalogo:catalogo'),
     }
 
-    # ── Renderizar templates ────────────────────────────────────────────
-    # render_to_string sin request (las tareas Celery no tienen request)
-    asunto     = (
+    # ── Renderizar templates (sin request) ──────────────────────────────
+    asunto = (
         f'Confirmación de pedido {pedido.numero_pedido} '
         f'— {config.nombre_empresa}'
     )
-    texto_plano = render_to_string(
-        'emails/confirmacion_pedido.txt', contexto
-    )
-    html_body   = render_to_string(
-        'emails/confirmacion_pedido.html', contexto
-    )
+    texto_plano = render_to_string('emails/confirmacion_pedido.txt',  contexto)
+    html_body   = render_to_string('emails/confirmacion_pedido.html', contexto)
 
-    # ── Construir el correo ────────────────────────────────────────────
     correo_destino = pedido.cliente.correo
-    correo_origen  = settings.DEFAULT_FROM_EMAIL
 
     mensaje = EmailMultiAlternatives(
-        subject      = asunto,
-        body         = texto_plano,      # versión texto plano (fallback)
-        from_email   = correo_origen,
-        to           = [correo_destino],
+        subject    = asunto,
+        body       = texto_plano,          # versión texto plano (fallback)
+        from_email = settings.DEFAULT_FROM_EMAIL,
+        to         = [correo_destino],
     )
     mensaje.attach_alternative(html_body, 'text/html')
 
-    # ── Enviar y manejar errores ───────────────────────────────────────
+    # ── Enviar y manejar errores ────────────────────────────────────────
     try:
         mensaje.send()
-        logger.info(
-            f'[correo_confirmacion] Correo enviado a {correo_destino} '
-            f'para pedido {pedido.numero_pedido}.'
-        )
-
-        # Marcar como enviado para evitar duplicados
-        pedido.correo_enviado = True
-        pedido.save(update_fields=['correo_enviado'])
-
-        return {
-            'estado':    'ok',
-            'pedido_id': pedido_id,
-            'correo':    correo_destino,
-        }
-
     except Exception as exc:
         logger.error(
             f'[correo_confirmacion] Error al enviar correo para pedido '
             f'{pedido.numero_pedido}: {exc}'
         )
-        # Reintento automático con Celery (hasta max_retries=3)
+        # Reintento con espera creciente: 60 s, 120 s, 180 s
         raise self.retry(exc=exc, countdown=60 * (self.request.retries + 1))
+
+    # Marcar como enviado (update() no pisa otros campos del pedido)
+    Pedido.objects.filter(pk=pedido.pk).update(correo_enviado=True)
+    logger.info(
+        f'[correo_confirmacion] Correo enviado a {correo_destino} '
+        f'para pedido {pedido.numero_pedido}.'
+    )
+    return {
+        'estado':    'ok',
+        'pedido_id': pedido_id,
+        'correo':    correo_destino,
+    }
 
 
 @shared_task(
@@ -829,19 +931,19 @@ def enviar_confirmacion_pedido(self, pedido_id: int) -> dict:
 def verificar_stock_bajo(self, umbral: int = 5) -> dict:
     """Verifica productos con stock bajo y envía alerta al admin.
 
-    W17: Si hay productos bajo el umbral, envía correo a ADMINS[0].
+    W17: si hay productos bajo el umbral, envía correo a ADMINS[0].
+    W18: se programa con Celery Beat.
 
     Args:
         umbral: cantidad mínima antes de alertar (default: 5).
 
     Returns:
-        dict con conteo y lista de productos con stock bajo.
+        dict con umbral, total, productos_bajos y alerta_enviada.
     """
     from productos.models import Producto   # import local
 
     productos_bajos = list(
         Producto.objects
-        .select_related('categoria')
         .filter(activo=True, stock__lt=umbral)
         .values('pk', 'nombre', 'stock', 'categoria__nombre')
         .order_by('stock')
@@ -849,57 +951,60 @@ def verificar_stock_bajo(self, umbral: int = 5) -> dict:
 
     if not productos_bajos:
         logger.info(
-            f'[stock_bajo] Todos los productos tienen stock ≥ {umbral}. OK.'
+            f'[stock_bajo] Todos los productos tienen stock >= {umbral}. OK.'
         )
-        return {'umbral': umbral, 'total': 0, 'productos_bajos': []}
+        return {
+            'umbral': umbral, 'total': 0,
+            'productos_bajos': [], 'alerta_enviada': False,
+        }
 
     logger.warning(
         f'[stock_bajo] {len(productos_bajos)} producto(s) con stock < {umbral}.'
     )
 
-    # Enviar alerta por correo si hay administradores configurados
+    alerta_enviada = False
     if settings.ADMINS:
-        _enviar_alerta_stock(productos_bajos, umbral)
+        alerta_enviada = _enviar_alerta_stock(productos_bajos, umbral)
 
     return {
         'umbral':          umbral,
         'total':           len(productos_bajos),
         'productos_bajos': productos_bajos,
+        'alerta_enviada':  alerta_enviada,
     }
 
 
-def _enviar_alerta_stock(productos_bajos: list, umbral: int) -> None:
+def _enviar_alerta_stock(productos_bajos: list, umbral: int) -> bool:
     """Envía el correo de alerta de stock al primer administrador.
 
     Args:
         productos_bajos: lista de dicts con nombre, stock y categoría.
         umbral:          umbral mínimo configurado.
+
+    Returns:
+        True si el correo se envió; False si falló (se registra en el log).
     """
     from configuracion.models import ConfiguracionERP   # import local
 
     config = ConfiguracionERP.get_instance()
-    fecha  = timezone.now().strftime('%d/%m/%Y %H:%M')
-
-    url_admin = (
-        'https://erp-django-utec.onrender.com/admin/productos/producto/'
-    )
+    fecha  = timezone.localtime().strftime('%d/%m/%Y %H:%M')
 
     contexto = {
-        'productos_bajos':  productos_bajos,
-        'total_productos':  len(productos_bajos),
-        'umbral':           umbral,
-        'fecha':            fecha,
-        'url_admin':        url_admin,
-        'config':           config,
+        'productos_bajos': productos_bajos,
+        'total_productos': len(productos_bajos),
+        'umbral':          umbral,
+        'fecha':           fecha,
+        'url_admin':       _url_absoluta('admin:productos_producto_changelist'),
+        'config':          config,
     }
 
-    asunto      = (
+    asunto = (
         f'[ALERTA] {len(productos_bajos)} producto(s) con stock < {umbral}'
     )
     texto_plano = render_to_string('emails/alerta_stock.txt',  contexto)
     html_body   = render_to_string('emails/alerta_stock.html', contexto)
 
-    admin_nombre, admin_correo = settings.ADMINS[0]
+    _admin_nombre, admin_correo = settings.ADMINS[0]
 
     mensaje = EmailMultiAlternatives(
         subject    = asunto,
@@ -911,13 +1016,31 @@ def _enviar_alerta_stock(productos_bajos: list, umbral: int) -> None:
 
     try:
         mensaje.send()
-        logger.info(
-            f'[stock_bajo] Alerta enviada a {admin_correo}. '
-            f'{len(productos_bajos)} productos.'
-        )
     except Exception as exc:
         logger.error(f'[stock_bajo] Error al enviar alerta: {exc}')
+        return False
+
+    logger.info(
+        f'[stock_bajo] Alerta enviada a {admin_correo}. '
+        f'{len(productos_bajos)} productos.'
+    )
+    return True
 ```
+
+> ⚠️ **Correcciones respecto a la versión anterior de la guía:**
+> - **Sin URL fija** `https://erp-django-utec.onrender.com`: cada estudiante
+>   tiene su propio servicio en Render. Se usa `settings.SITE_URL`
+>   (en Render = `RENDER_EXTERNAL_URL`, automática) + `reverse()`.
+> - `select_related('categoria')` se quitó de `verificar_stock_bajo`:
+>   con `.values('categoria__nombre')` Django ya hace el JOIN y lo ignora.
+> - `correo_enviado` se marca con `Pedido.objects.filter(...).update(...)`
+>   **después** de un envío exitoso; si `send()` falla, queda en `False`
+>   y el reintento lo vuelve a intentar.
+> - `verificar_stock_bajo` devuelve también `alerta_enviada` (True/False).
+> - En modo **EAGER** (laboratorio, sin Redis) `self.retry()` repite la
+>   tarea al instante (ignora `countdown`) y al agotar los intentos lanza
+>   `celery.exceptions.Retry`. El webhook la atrapa (`try/except` de W16)
+>   y responde 200 a Stripe: el pago nunca se pierde por un fallo de correo.
 
 ---
 
@@ -925,43 +1048,57 @@ def _enviar_alerta_stock(productos_bajos: list, umbral: int) -> None:
 
 ### 5.1 Prueba con el shell de Django (sin worker real)
 
+Sin `REDIS_URL` el proyecto ya está en modo EAGER y con el backend de
+consola, así que **no hace falta** `override_settings`. La prueba se
+ejecuta dentro de una transacción que se **revierte** al final: así no
+queda marcado `correo_enviado=True` en tus pedidos reales.
+
 ```cmd
 python manage.py shell
 ```
 
 ```python
-from django.test.utils import override_settings
+from django.db import transaction
+from ventas.tasks import enviar_confirmacion_pedido, verificar_stock_bajo
+from ventas.models import Pedido
 
-with override_settings(
-    CELERY_TASK_ALWAYS_EAGER=True,
-    EMAIL_BACKEND='django.core.mail.backends.console.EmailBackend'
-):
-    from ventas.tasks import enviar_confirmacion_pedido
-    from ventas.models import Pedido
-
-    # Tomar un pedido existente
-    pedido = Pedido.objects.filter(estado='pagado').first()
-    if pedido:
-        resultado = enviar_confirmacion_pedido.delay(pedido.pk)
-        print('Resultado:', resultado.get())
+with transaction.atomic():
+    # Si no hay pedidos pagados, se simula uno (se revierte al final)
+    p = Pedido.objects.filter(estado='pagado').first() or Pedido.objects.first()
+    if p:
+        p.estado = 'pagado'
+        p.correo_enviado = False
+        p.save()
+        print('Resultado 1:', enviar_confirmacion_pedido.delay(p.pk).get())
+        print('Resultado 2:', enviar_confirmacion_pedido.delay(p.pk).get())
     else:
-        print('No hay pedidos pagados. Crea uno en /catalogo/checkout/')
+        print('No hay pedidos. Crea uno en /catalogo/checkout/')
+    r = verificar_stock_bajo.delay(umbral=5).get()
+    print('Stock bajo:', r['total'], '· alerta enviada:', r['alerta_enviada'])
+    transaction.set_rollback(True)     # ← deshacer cambios de la prueba
 ```
 
-**Resultado esperado en la terminal:**
+**Resultado esperado en la terminal** (resumen):
 ```
-Content-Type: text/plain; charset="utf-8"
-MIME-Version: 1.0
-Content-Transfer-Encoding: 7bit
-Subject: Confirmación de pedido PED-2025-0001 — Mi Empresa ERP
+Content-Type: multipart/alternative; boundary="===============...=="
+Subject: Confirmación de pedido PED-2026-0002 — Mi Empresa ERP
 From: ERP Django <noreply@erp-django.com>
-To: cliente@test.com
-
+To: cliente@correo.com
+...
+Content-Type: text/plain; charset="utf-8"
 ¡Pago confirmado! — Mi Empresa ERP
 ...
+Content-Type: text/html; charset="utf-8"
+<!DOCTYPE html> ...
 
-[correo_confirmacion] Correo enviado a cliente@test.com para PED-2025-0001.
+Resultado 1: {'estado': 'ok', 'pedido_id': 2, 'correo': 'cliente@correo.com'}
+Resultado 2: {'estado': 'skip', 'pedido_id': 2, 'razon': 'correo ya enviado'}
+Subject: [ALERTA] 3 producto(s) con stock < 5
+...
+Stock bajo: 3 · alerta enviada: True
 ```
+
+✅ La segunda llamada devuelve `skip`: **idempotencia comprobada**.
 
 ---
 
@@ -969,10 +1106,17 @@ To: cliente@test.com
 
 ```bash
 # .env.example — agregar:
+
+# W17 — Correo (django-anymail + SendGrid)
+# Local: EMAIL_BACKEND de consola (el correo se imprime en la terminal).
+# Render: settings_prod.py usa SendGrid automáticamente si existe
+#         SENDGRID_API_KEY. DEFAULT_FROM_EMAIL debe ser un Sender
+#         VERIFICADO en SendGrid (Settings → Sender Authentication).
 SENDGRID_API_KEY=SG.TU_CLAVE_AQUI
-DEFAULT_FROM_EMAIL=ERP Django <noreply@tu-dominio.com>
+DEFAULT_FROM_EMAIL=ERP Django <tu-correo-verificado@dominio.com>
 ADMIN_EMAIL=admin@tu-dominio.com
 EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+# SITE_URL=http://127.0.0.1:8000   (en Render se usa RENDER_EXTERNAL_URL)
 ```
 
 ---
@@ -981,20 +1125,29 @@ EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
 
 ### 6.1 Crear `tests/test_w17_correo.py`
 
+> La versión anterior anunciaba "8 pruebas" pero listaba 9. Se
+> conservan las 9 y se agregan **3 pruebas de regresión** que fallaban
+> con el código anterior: centavos del subtotal, escape en `.txt` y
+> fallo de SendGrid. Total: **12**.
+
 ```python
 """Suite de pruebas W17 — Correos transaccionales con django-anymail.
 
 Usa el backend locmem (en memoria) para capturar correos sin enviarlos.
 Los correos enviados se almacenan en django.core.mail.outbox.
+NO se conecta a SendGrid ni a Redis (laboratorio sin Docker).
 
 Ejecutar con:
     python manage.py test tests.test_w17_correo --verbosity=2
 
 Resultado esperado:
-    Ran 8 tests in X.XXXs
+    Ran 12 tests in X.XXXs
     OK
 """
 from decimal import Decimal
+from unittest.mock import patch
+
+from celery.exceptions import Retry
 
 from django.core import mail
 from django.test import TestCase, override_settings
@@ -1015,23 +1168,26 @@ EMAIL_SETTINGS = {
     'CELERY_TASK_EAGER_PROPAGATES': True,
     'ADMINS': [('Admin Test', 'admin@test.com')],
     'DEFAULT_FROM_EMAIL': 'test@erp.com',
+    'SITE_URL': 'https://erp-test.onrender.com',
 }
 
 
-def _crear_pedido_pagado(correo_enviado=False) -> Pedido:
+def _crear_pedido_pagado(correo_enviado=False, nombre_cliente='Cliente Test',
+                         precio='100.00', cantidad=2) -> Pedido:
     """Crea un Pedido en estado 'pagado' para los tests."""
     ConfiguracionERP.get_instance()
-    cat  = Categoria.objects.create(nombre=f'Cat-{Pedido.objects.count()}')
+    n    = Pedido.objects.count()
+    cat  = Categoria.objects.create(nombre=f'Cat-{n}')
     prod = Producto.objects.create(
-        nombre='Producto Test', precio=Decimal('100.00'),
+        nombre='Producto Test', precio=Decimal(precio),
         stock=5, categoria=cat
     )
     cli  = Cliente.objects.create(
-        nombre='Cliente Test',
-        correo=f'cliente{Pedido.objects.count()}@test.com'
+        nombre=nombre_cliente,
+        correo=f'cliente{n}@test.com'
     )
     return Pedido.objects.create(
-        numero_pedido  = f'PED-TEST-{Pedido.objects.count():03d}',
+        numero_pedido  = f'PED-TEST-{n:03d}',
         cliente        = cli,
         estado         = 'pagado',
         total_pagado   = Decimal('116.00'),
@@ -1040,7 +1196,7 @@ def _crear_pedido_pagado(correo_enviado=False) -> Pedido:
             {
                 'producto_id': prod.pk,
                 'nombre':      prod.nombre,
-                'cantidad':    2,
+                'cantidad':    cantidad,
                 'precio':      str(prod.precio),
             }
         ],
@@ -1075,7 +1231,6 @@ class EnviarConfirmacionTest(TestCase):
         enviar_confirmacion_pedido.delay(pedido.pk)
 
         mensaje = mail.outbox[0]
-        # Verificar que hay alternativa HTML
         alternativas = [
             body for body, mime in mensaje.alternatives
             if mime == 'text/html'
@@ -1099,7 +1254,6 @@ class EnviarConfirmacionTest(TestCase):
 
         enviar_confirmacion_pedido.delay(pedido.pk)
 
-        # mail.outbox debe estar vacío (no se envió correo)
         self.assertEqual(len(mail.outbox), 0)
 
     def test_tarea_devuelve_skip_si_ya_enviado(self):
@@ -1107,6 +1261,38 @@ class EnviarConfirmacionTest(TestCase):
         pedido = _crear_pedido_pagado(correo_enviado=True)
         resultado = enviar_confirmacion_pedido.delay(pedido.pk).get()
         self.assertEqual(resultado['estado'], 'skip')
+
+    # ── Pruebas de regresión agregadas en la verificación de W17 ─────────
+
+    def test_subtotal_conserva_centavos_y_url_usa_site_url(self):
+        """Subtotal = precio × cantidad con centavos; enlace con SITE_URL."""
+        pedido = _crear_pedido_pagado(precio='99.50', cantidad=3)
+        enviar_confirmacion_pedido.delay(pedido.pk)
+
+        html = mail.outbox[0].alternatives[0][0]
+        self.assertIn('$298.50', html)          # widthratio daría $298
+        self.assertIn('https://erp-test.onrender.com/catalogo/', html)
+
+    def test_texto_plano_no_escapa_html(self):
+        """La versión .txt no debe mostrar entidades HTML (&#x27; / &amp;)."""
+        pedido = _crear_pedido_pagado(nombre_cliente="O'Brien & Hijos")
+        enviar_confirmacion_pedido.delay(pedido.pk)
+
+        self.assertIn("O'Brien & Hijos", mail.outbox[0].body)
+
+    def test_fallo_de_envio_no_marca_correo_enviado(self):
+        """Si SendGrid falla, la tarea reintenta/propaga y NO marca el pedido."""
+        pedido = _crear_pedido_pagado()
+        with patch(
+            'django.core.mail.EmailMultiAlternatives.send',
+            side_effect=ConnectionError('SendGrid caído'),
+        ):
+            # En modo EAGER Celery reintenta y termina lanzando Retry
+            with self.assertRaises((ConnectionError, Retry)):
+                enviar_confirmacion_pedido.delay(pedido.pk)
+
+        pedido.refresh_from_db()
+        self.assertFalse(pedido.correo_enviado)
 
 
 @override_settings(**EMAIL_SETTINGS)
@@ -1119,7 +1305,7 @@ class AlertaStockTest(TestCase):
 
     def test_alerta_enviada_si_hay_stock_bajo(self):
         """Si hay productos con stock < umbral, se envía alerta al admin."""
-        cat  = Categoria.objects.create(nombre='Cat Alert')
+        cat = Categoria.objects.create(nombre='Cat Alert')
         Producto.objects.create(
             nombre='Stock Bajo', precio=Decimal('50.00'),
             stock=2, categoria=cat
@@ -1132,7 +1318,7 @@ class AlertaStockTest(TestCase):
 
     def test_alerta_contiene_nombre_producto(self):
         """El correo de alerta debe mencionar el producto con stock bajo."""
-        cat  = Categoria.objects.create(nombre='Cat Alert2')
+        cat = Categoria.objects.create(nombre='Cat Alert2')
         Producto.objects.create(
             nombre='Teclado Escaso', precio=Decimal('200.00'),
             stock=1, categoria=cat
@@ -1141,13 +1327,11 @@ class AlertaStockTest(TestCase):
         verificar_stock_bajo.delay(umbral=5)
 
         self.assertEqual(len(mail.outbox), 1)
-        # Verificar en el texto plano O en el HTML
-        cuerpo = mail.outbox[0].body
-        self.assertIn('Teclado Escaso', cuerpo)
+        self.assertIn('Teclado Escaso', mail.outbox[0].body)
 
     def test_no_alerta_si_todo_ok(self):
         """Si todos los productos tienen stock >= umbral, no se envía correo."""
-        cat  = Categoria.objects.create(nombre='Cat OK')
+        cat = Categoria.objects.create(nombre='Cat OK')
         Producto.objects.create(
             nombre='Bien surtido', precio=Decimal('100.00'),
             stock=20, categoria=cat
@@ -1161,24 +1345,31 @@ class AlertaStockTest(TestCase):
 ### 6.2 Ejecutar los tests
 
 ```cmd
-python manage.py test tests.test_w17_correo --verbosity=2
+python manage.py test tests.test_w17_correo tests.test_w16_celery --verbosity=2
 ```
 
-**Resultado esperado:**
+**Resultado esperado** (W17 = 12, W16 = 9):
 ```
-test_alerta_contiene_nombre_producto ... ok
-test_alerta_enviada_si_hay_stock_bajo ... ok
-test_correo_asunto_contiene_numero_pedido ... ok
-test_correo_cuerpo_html_contiene_total ... ok
-test_correo_enviado_a_cliente ... ok
-test_correo_marca_correo_enviado_true ... ok
-test_correo_no_duplicado_si_ya_enviado ... ok
-test_no_alerta_si_todo_ok ... ok
-test_tarea_devuelve_skip_si_ya_enviado ... ok
+El correo de alerta debe mencionar el producto con stock bajo. ... ok
+Si hay productos con stock < umbral, se envía alerta al admin. ... ok
+Si todos los productos tienen stock >= umbral, no se envía correo. ... ok
+El asunto debe incluir el número de pedido. ... ok
+El cuerpo HTML debe contener el total pagado. ... ok
+El correo debe enviarse al correo del cliente. ... ok
+Tras el envío, Pedido.correo_enviado debe ser True. ... ok
+Si correo_enviado=True, la tarea NO debe enviar otro correo. ... ok
+Si SendGrid falla, la tarea reintenta/propaga y NO marca el pedido. ... ok
+Subtotal = precio × cantidad con centavos; enlace con SITE_URL. ... ok
+La tarea debe devolver estado 'skip' si ya se envió. ... ok
+La versión .txt no debe mostrar entidades HTML (&#x27; / &amp;). ... ok
+...  (9 pruebas de W16) ...
 
-Ran 8 tests in X.XXXs
+Ran 21 tests in X.XXXs
 OK
 ```
+
+> Las líneas `[stock_bajo] ...` y `[correo_confirmacion] Error ...` que
+> aparecen intercaladas son los `logger` de las tareas: es lo esperado.
 
 ### 6.3 Suite acumulada
 
@@ -1186,7 +1377,90 @@ OK
 python manage.py test tests --verbosity=0
 ```
 
-**Resultado esperado:** `Ran 163 tests in X.XXXs · OK` (155 + 8)
+**Resultado esperado:** `Ran 159 tests` (147 + 12).
+Las únicas fallas deben ser las **4 fallas y 7 errores previos** de
+W01/W02/W03/W08/W12 (ver nota del Arranque); W13–W17 en verde.
+
+---
+
+## PARTE 7 — Despliegue en Render + Prueba Real (15 min)
+
+> En el laboratorio no hay Docker ni Redis: **la prueba real con SendGrid
+> se hace en Render**, donde corre el worker embebido de W16.
+
+### 7.1 Agregar las variables a `render.yaml`
+
+```yaml
+      # W17: correo transaccional con SendGrid  (después de CELERY_EMBEDDED_WORKER)
+      - key: SENDGRID_API_KEY        # SG.xxxx (permiso Mail Send)
+        sync: false
+      - key: DEFAULT_FROM_EMAIL      # ERP Django <sender-verificado@...>
+        sync: false
+      - key: ADMIN_EMAIL             # recibe alertas de stock y errores 500
+        sync: false
+```
+
+### 7.2 Variables de entorno del servicio web en Render
+
+Dashboard → servicio web → **Environment**. Si el servicio ya existe, el
+Blueprint **no** crea las variables `sync: false`: hay que agregarlas a mano.
+
+| Variable | Valor | Semana |
+|---|---|---|
+| `DJANGO_SETTINGS_MODULE` | `core.settings_prod` | W03 |
+| `SECRET_KEY` | (generada por Render) | W03 |
+| `DEBUG` | `False` | W03 |
+| `ALLOWED_HOSTS` | `.onrender.com` | W03 |
+| `DATABASE_URL` | (desde `erp-django-db`, Internal URL) | W03 |
+| `STRIPE_SECRET_KEY` | `sk_test_...` | W14 |
+| `STRIPE_PUBLISHABLE_KEY` | `pk_test_...` | W14 |
+| `STRIPE_WEBHOOK_SECRET` | `whsec_...` del endpoint del **Dashboard** | W15 |
+| `REDIS_URL` | Internal Key Value URL `redis://red-...:6379` | W16 |
+| `CELERY_EMBEDDED_WORKER` | `1` | W16 |
+| **`SENDGRID_API_KEY`** | `SG....` | **W17** |
+| **`DEFAULT_FROM_EMAIL`** | `ERP Django <correo-From-verificado>` (no el Reply-To) | **W17** |
+| **`ADMIN_EMAIL`** | correo que recibe alertas | **W17** |
+| `AWS_*` | opcional (W11) | W11 |
+
+> `RENDER_EXTERNAL_URL` la pone Render automáticamente (no agregarla):
+> de ahí sale `SITE_URL` para los enlaces del correo.
+> **No** definir `EMAIL_BACKEND` en Render: `settings_prod.py` lo decide.
+
+### 7.3 Desplegar y probar
+
+1. `git push origin main` → Render reconstruye la imagen
+   (`pip install -r requirements.txt` instala `django-anymail`) y el
+   entrypoint aplica la migración `0004_correo_enviado_pedido`.
+2. En **Logs** verificar:
+   `Applying ventas.0004_correo_enviado_pedido... OK` y
+   `Iniciando worker de Celery embebido (cola erp_django)...`
+3. Hacer una compra de prueba en `https://TU-SERVICIO.onrender.com/catalogo/`
+   con la tarjeta `4242 4242 4242 4242`, usando como cliente un correo
+   al que tengas acceso.
+4. En **Logs**: `Task ventas.enviar_confirmacion_pedido[...] succeeded ...
+   {'estado': 'ok', ...}`.
+5. Revisar la bandeja (y **Spam**). En SendGrid → **Activity** debe
+   aparecer como *Delivered*.
+6. Admin → Pedidos → el pedido muestra **Correo de confirmación enviado ✔**.
+
+**Prueba manual de la alerta de stock** (Render → servicio → **Shell**,
+disponible solo en planes de pago; en Free se verifica con la compra):
+```bash
+python manage.py shell -c "from ventas.tasks import verificar_stock_bajo; print(verificar_stock_bajo.delay(5).get(timeout=60))"
+```
+
+### 7.4 Solución de problemas
+
+| Síntoma en Logs | Causa | Solución |
+|---|---|---|
+| `403 ... does not match a verified Sender Identity` | `DEFAULT_FROM_EMAIL` no verificado | Verificar Single Sender (1.2-bis) y usar ese correo exacto |
+| `401 ... authorization grant is invalid` | API Key mal copiada o revocada | Crear otra clave y actualizar `SENDGRID_API_KEY` |
+| `Retry in 60s: ...` repetido | SendGrid rechaza el envío | Leer el mensaje del error: casi siempre remitente o clave |
+| El correo aparece en los Logs como texto | Falta `SENDGRID_API_KEY` | Agregar la variable y redeploy |
+| Pedido `pagado` pero sin correo ni tarea | El webhook no llega | Revisar W15 §3.3 (URL propia de Render y `whsec` del Dashboard) |
+| Correo recibido en Spam | Remitente `@gmail.com` sin autenticación de dominio | Normal en el laboratorio; en producción usar Domain Authentication |
+| Webhook: `no se pudo encolar la confirmación ... VersionMismatch: Redis transport requires redis-py 6.1.0 or later` | `kombu` ≥ 5.6 con `redis==5.0.1` | `kombu==5.3.7` en `requirements.txt` (W16 §1.1) y redeploy |
+| Pedido pagado que se quedó sin correo | Falló el encolado o el envío; el webhook no reenvía un pedido ya pagado | Admin → Pedidos → acción **Enviar correo de confirmación** (W18 §5.4) |
 
 ---
 
@@ -1201,14 +1475,16 @@ python manage.py test tests --verbosity=0
 |---|---|
 | pip install celery redis flower | ✅ W16 |
 | core/celery.py + tareas placeholder | ✅ W16 |
-| pip install django-anymail | ✅ W17 |
-| EMAIL_BACKEND configurado (console dev / anymail prod) | ✅ W17 |
+| pip install django-anymail[sendgrid]==10.3 | ✅ W17 |
+| EMAIL_BACKEND configurado (console dev / SendGrid prod si hay API Key) | ✅ W17 |
 | correo_enviado en Pedido + migración 0004 | ✅ W17 |
 | Template confirmacion_pedido.html + .txt | ✅ W17 |
 | Template alerta_stock.html + .txt | ✅ W17 |
-| enviar_confirmacion_pedido: correo real + idempotencia | ✅ W17 |
+| enviar_confirmacion_pedido: correo real + idempotencia + retry | ✅ W17 |
 | verificar_stock_bajo: alerta al admin | ✅ W17 |
-| 8 tests con mail.outbox | ✅ W17 |
+| 12 tests con mail.outbox (9 guía + 3 regresión) | ✅ W17 |
+| render.yaml: SENDGRID_API_KEY, DEFAULT_FROM_EMAIL, ADMIN_EMAIL | ✅ W17 |
+| Sender verificado en SendGrid + prueba real en Render | ⏳ W17 (en Render) |
 | Celery Beat + tareas programadas | ⏳ W18 |
 ```
 
@@ -1219,17 +1495,22 @@ git add .
 git status
 
 :: Verificar que incluye:
-::   ventas/tasks.py (reemplazado con lógica real)
+::   requirements.txt (django-anymail==10.3, en UTF-8)
+::   core/settings.py (EMAIL_BACKEND + ANYMAIL + ADMINS + SITE_URL)
+::   core/settings_prod.py (SendGrid si existe SENDGRID_API_KEY)
 ::   ventas/models.py (con correo_enviado)
 ::   ventas/migrations/0004_correo_enviado_pedido.py
+::   ventas/tasks.py (reemplazado con lógica real)
 ::   templates/emails/confirmacion_pedido.html + .txt
 ::   templates/emails/alerta_stock.html + .txt
-::   core/settings.py (EMAIL_BACKEND + ANYMAIL + ADMINS)
-::   core/settings_prod.py (EMAIL_BACKEND anymail)
 ::   tests/test_w17_correo.py
+::   render.yaml (variables W17)
+::   .env.example
 ::   sprint5_planning.md
+::
+:: ⚠️ Verificar que NO aparece .env (contiene la API Key de SendGrid)
 
-git commit -m "Sprint 5 W17: SendGrid + correos reales + idempotencia + 163 tests OK"
+git commit -m "Sprint 5 W17: SendGrid + correos reales + idempotencia + 159 tests"
 git push origin main
 ```
 
@@ -1247,13 +1528,16 @@ E:\finalizar_sesion.bat
 
 ```
 INSTALACIÓN Y CONFIG
-[ ] pip install django-anymail[sendgrid] → sin errores
+[ ] pip install django-anymail[sendgrid]==10.3 → sin errores
+[ ] requirements.txt con django-anymail==10.3 (UTF-8, no UTF-16)
 [ ] 'anymail' en INSTALLED_APPS
 [ ] EMAIL_BACKEND en settings.py (console para dev)
-[ ] EMAIL_BACKEND = anymail.sendgrid en settings_prod.py
-[ ] ANYMAIL = {'SENDGRID_API_KEY': SENDGRID_API_KEY}
-[ ] DEFAULT_FROM_EMAIL con nombre y correo
+[ ] settings_prod.py: SendGrid solo si existe SENDGRID_API_KEY
+[ ] ANYMAIL = {'SENDGRID_API_KEY': SENDGRID_API_KEY}  (sin ip_pool_name)
+[ ] DEFAULT_FROM_EMAIL = Sender VERIFICADO en SendGrid
+[ ] SERVER_EMAIL = DEFAULT_FROM_EMAIL
 [ ] ADMINS con al menos un admin
+[ ] SITE_URL (en Render sale de RENDER_EXTERNAL_URL)
 [ ] python manage.py check → 0 issues
 
 MODELO Y MIGRACIÓN
@@ -1262,23 +1546,25 @@ MODELO Y MIGRACIÓN
 [ ] showmigrations ventas → [X] 0004
 
 TEMPLATES DE CORREO
-[ ] templates/emails/confirmacion_pedido.html con CSS inline
-[ ] templates/emails/confirmacion_pedido.txt (fallback texto)
+[ ] templates/emails/confirmacion_pedido.html (subtotal con centavos)
+[ ] templates/emails/confirmacion_pedido.txt con {% autoescape off %}
 [ ] templates/emails/alerta_stock.html
-[ ] templates/emails/alerta_stock.txt
+[ ] templates/emails/alerta_stock.txt con {% autoescape off %}
 [ ] Todos los templates usan context sin request
 
 TAREAS ACTUALIZADAS
 [ ] enviar_confirmacion_pedido: verificación correo_enviado al inicio
 [ ] enviar_confirmacion_pedido: EmailMultiAlternatives (texto + HTML)
-[ ] enviar_confirmacion_pedido: pedido.correo_enviado=True tras envío
+[ ] enviar_confirmacion_pedido: correo_enviado=True SOLO tras envío exitoso
 [ ] enviar_confirmacion_pedido: self.retry() en caso de excepción
 [ ] verificar_stock_bajo: _enviar_alerta_stock si productos_bajos
+[ ] Sin URLs fijas de Render en el código (SITE_URL + reverse())
 [ ] Todos los imports de modelos son locales (dentro de la función)
 
-TESTS (8 tests con locmem backend)
-[ ] test tests.test_w17_correo → 8/8 OK
-[ ] test tests → 163/163 OK acumulados
+TESTS (12 tests con locmem backend)
+[ ] test tests.test_w17_correo → 12/12 OK
+[ ] test tests.test_w16_celery → 9/9 OK
+[ ] test tests → 159 (solo las 11 fallas previas de W01–W12)
 [ ] @override_settings(EMAIL_BACKEND='...locmem...', CELERY_TASK_ALWAYS_EAGER=True)
 [ ] mail.outbox = [] en setUp()
 [ ] test correo enviado al cliente → len(mail.outbox) == 1
@@ -1286,11 +1572,22 @@ TESTS (8 tests con locmem backend)
 [ ] test HTML contiene total_pagado
 [ ] test correo_enviado=True tras envío
 [ ] test NO duplicado si correo_enviado=True → outbox vacío
+[ ] test subtotal con centavos + enlace con SITE_URL
+[ ] test .txt sin entidades HTML
+[ ] test fallo de SendGrid → correo_enviado sigue False
 [ ] test alerta stock → outbox tiene 1 mensaje a admin
 [ ] test sin stock bajo → outbox vacío
 
+RENDER (PARTE 7)
+[ ] Single Sender verificado en SendGrid
+[ ] SENDGRID_API_KEY, DEFAULT_FROM_EMAIL, ADMIN_EMAIL en Environment
+[ ] Logs: Applying ventas.0004_correo_enviado_pedido... OK
+[ ] Compra de prueba → correo recibido (revisar Spam)
+[ ] SendGrid → Activity → Delivered
+
 GIT
 [ ] sprint5_planning.md actualizado
+[ ] .env NO incluido en el commit
 [ ] Commit con mensaje descriptivo
 [ ] git push → GitHub con templates/emails/
 [ ] finalizar_sesion.bat → archivos en USB
@@ -1301,16 +1598,16 @@ GIT
 ## DIAGRAMA: Flujo completo del correo transaccional (W17)
 
 ```
-Pago confirmado (webhook payment_intent.succeeded)
+Pago confirmado (webhook payment_intent.succeeded)   ← ÚNICO disparador
     │
-    ├─ Pedido.estado = 'pagado'
-    └─ enviar_confirmacion_pedido.delay(pedido_id)
+    ├─ Pedido.estado = 'pagado' + descontar stock (W15)
+    └─ try: enviar_confirmacion_pedido.delay(pedido_id)  (W16)
                 │
-                │  Redis (cola erp_django)
-                │  Mensaje: {task: '...', args: [42]}
+                │  Render: Redis/Key Value (cola erp_django)
+                │  Laboratorio: modo EAGER (sin Redis, mismo proceso)
                 │
                 ▼
-    Celery Worker (proceso separado)
+    Celery Worker (Render: embebido en el contenedor web, --pool=solo)
         │
         ├─ enviar_confirmacion_pedido(pedido_id=42)
         │       │
@@ -1321,8 +1618,9 @@ Pago confirmado (webhook payment_intent.succeeded)
         │       ├─ render_to_string('emails/confirmacion_pedido.html', ctx)
         │       │
         │       ├─ EmailMultiAlternatives(
-        │       │       subject='Confirmación PED-2025-0042',
+        │       │       subject='Confirmación de pedido PED-2026-0042 — ...',
         │       │       body=texto_plano,
+        │       │       from_email=DEFAULT_FROM_EMAIL (Sender verificado),
         │       │       to=['cliente@email.com']
         │       │   )
         │       ├─ mensaje.attach_alternative(html, 'text/html')
@@ -1332,13 +1630,14 @@ Pago confirmado (webhook payment_intent.succeeded)
         │       │       ▼ (en dev:  console backend → terminal)
         │       │       ▼ (en test: locmem → mail.outbox[0])
         │       │
-        │       └─ pedido.correo_enviado = True → save()
+        │       ├─ si falla → self.retry() (60 s, 120 s, 180 s)
+        │       └─ si OK   → Pedido.update(correo_enviado=True)
         │
         └─ return {'estado': 'ok', 'correo': 'cliente@email.com'}
 
 mail.outbox en tests:
-    >>> mail.outbox[0].to         → ['cliente@test.com']
-    >>> mail.outbox[0].subject    → 'Confirmación de pedido PED-TEST-001...'
+    >>> mail.outbox[0].to         → ['cliente0@test.com']
+    >>> mail.outbox[0].subject    → 'Confirmación de pedido PED-TEST-000 — ...'
     >>> mail.outbox[0].alternatives[0][1]  → 'text/html'
 ```
 
@@ -1349,7 +1648,8 @@ mail.outbox en tests:
 **¿Qué entrega W17?**
 Las tareas Celery envían correos reales con SendGrid: confirmación
 de pedido al cliente (con idempotencia) y alerta de stock bajo al
-administrador. 163 tests verifican el comportamiento con `mail.outbox`.
+administrador. 12 tests nuevos (159 en total) verifican el
+comportamiento con `mail.outbox`.
 
 **¿Qué abre W18 / Hito M6?**
 Las tareas de W17 se ejecutan solo cuando un evento ocurre (pago
@@ -1363,8 +1663,12 @@ cada mañana a las 8:00 AM automáticamente.
 |---|---|
 | `verificar_stock_bajo` task | W18 la programa en `CELERY_BEAT_SCHEDULE` |
 | `ventas/tasks.py` con estructura base | W18 agrega `reporte_ventas_diario` task |
-| `docker-compose.yml` con worker | W18 agrega servicio `celery_beat` separado |
-| 163 tests pasando | W18 agrega tests de la programación horaria |
+| Worker embebido en `docker-entrypoint.sh` (W16) | W18 agrega Beat: en Render Free no hay Background Workers, así que también irá embebido |
+| 159 tests | W18 agrega tests de la programación horaria |
+
+> ⚠️ **Render Free:** el servicio web se **duerme** tras ~15 min sin
+> tráfico; mientras duerme, Beat no dispara tareas. Tenerlo en cuenta
+> al diseñar W18.
 
 **Tarea de investigación para W18:**
 > Lee la documentación de Celery Beat:
@@ -1383,6 +1687,43 @@ cada mañana a las 8:00 AM automáticamente.
 
 ---
 
+## NOTAS — Observaciones de la verificación (2026-11-19)
+
+Inconsistencias encontradas al ejecutar la guía original y corregidas
+en esta versión:
+
+| # | Sección | Problema | Corrección |
+|---|---|---|---|
+| 1 | Respuesta W16 / 2.1 | Decía que `pago_exitoso()` también encola el correo | Desde W16 solo el webhook encola; los duplicados vienen de reintentos de Stripe/Celery |
+| 2 | Respuesta W16 | "API específica de Stripe" en la columna del SDK de SendGrid | "API específica de SendGrid" |
+| 3 | Arranque / 6.3 | 155 → 163 pruebas | Real: 147 → 159, con 11 fallas previas de W01–W12 |
+| 4 | 1.1 | `pip freeze > requirements.txt` en PowerShell genera UTF-16 | Agregar la línea a mano o usar cmd |
+| 5 | 1.2 | Faltaba verificar el remitente: SendGrid responde **403** | Nueva sección 1.2-bis (Single Sender) |
+| 6 | 1.4 | `esp_extra: ip_pool_name` hace fallar el envío en cuenta gratuita | Eliminado |
+| 7 | 1.4 | Faltaban `SERVER_EMAIL` y una URL base | Agregados `SERVER_EMAIL` y `SITE_URL` |
+| 8 | 1.5 | Backend SendGrid incondicional en producción | Solo si existe `SENDGRID_API_KEY` |
+| 9 | 3.2 | `{% widthratio %}` pierde centavos en el subtotal | `item.subtotal` calculado con `Decimal` |
+| 10 | 3.2 / 4.1 | Enlace a `/ventas/<pk>/` (detalle de **Venta**, no de Pedido) | Botón "Volver a la tienda" (`url_tienda`) |
+| 11 | 3.4 | Los `.txt` escapaban HTML (`&#x27;`, `&amp;`) | `{% autoescape off %}` |
+| 12 | 4.1 | URL fija `erp-django-utec.onrender.com` (cada alumno tiene su servicio) | `SITE_URL` + `reverse()` |
+| 13 | 5.1 | La prueba marcaba pedidos reales y fallaba si no había pagados | Transacción con rollback y pedido simulado |
+| 14 | 6.1 | "8 pruebas" pero listaba 9 | 9 + 3 de regresión = 12 |
+| 15 | Diagrama / W18 / Referencia | Worker "proceso separado", `docker-compose` y Redis local | Worker embebido en Render; laboratorio en EAGER |
+| 16 | — | Faltaba el despliegue a Render | Nueva PARTE 7 con variables y solución de problemas |
+
+**Revisión 2026-11-20 — confirmado en Render:** la compra de prueba generó
+el correo *"Confirmación de pedido PED-2026-0013"*, entregado vía SendGrid.
+Lecciones de ese despliegue, ya incorporadas arriba:
+
+| # | Sección | Problema | Corrección |
+|---|---|---|---|
+| 17 | 1.2-bis / 7.2 | `DEFAULT_FROM_EMAIL` con el **Reply-To** del Sender | Usar el **From** verificado |
+| 18 | 7.4 | Webhook sin poder encolar: `VersionMismatch` de kombu | `kombu==5.3.7` (W16 §1.1) |
+| 19 | 7.4 | Sin forma de reenviar el correo de un pedido ya pagado | Acción del admin (W18 §5.4) |
+| 20 | 6.3 | 11 fallas heredadas de W01–W12 | Corregidas en W18 §6.4 → 171 tests OK |
+
+---
+
 ## Referencia rápida de comandos W17
 
 ```cmd
@@ -1396,25 +1737,26 @@ python manage.py makemigrations ventas --name correo_enviado_pedido
 python manage.py migrate
 python manage.py runserver
 
-:: CELERY WORKER (terminal 2 — con Redis corriendo)
-celery -A core worker -l info -Q erp_django
+:: CELERY WORKER → NO en el laboratorio (sin Docker/Redis: modo EAGER).
+::   En Render lo arranca docker-entrypoint.sh (CELERY_EMBEDDED_WORKER=1).
 
-:: PRUEBA DE CORREO EN SHELL (backend consola)
+:: PRUEBA DE CORREO EN SHELL (backend consola, ver 5.1)
 python manage.py shell
->>> from django.test.utils import override_settings
->>> with override_settings(CELERY_TASK_ALWAYS_EAGER=True):
-...     from ventas.tasks import enviar_confirmacion_pedido
-...     from ventas.models import Pedido
+>>> from django.db import transaction
+>>> from ventas.tasks import enviar_confirmacion_pedido
+>>> from ventas.models import Pedido
+>>> with transaction.atomic():
 ...     p = Pedido.objects.filter(estado='pagado').first()
-...     if p: enviar_confirmacion_pedido.delay(p.pk)
+...     if p: print(enviar_confirmacion_pedido.delay(p.pk).get())
+...     transaction.set_rollback(True)
 
 :: TESTS
-python manage.py test tests.test_w17_correo --verbosity=2
-python manage.py test tests --verbosity=0   (163 tests)
+python manage.py test tests.test_w17_correo --verbosity=2   (12 tests)
+python manage.py test tests --verbosity=0                   (159 tests)
 
 :: GIT
 git add .
-git commit -m "Sprint 5 W17: SendGrid + correos reales + 163 tests OK"
+git commit -m "Sprint 5 W17: SendGrid + correos reales + idempotencia + 159 tests"
 git push origin main
 git log --oneline
 ```

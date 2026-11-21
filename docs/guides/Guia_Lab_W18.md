@@ -41,8 +41,14 @@
 > | `worker -B` (combinado) | Si el worker se cae, el scheduler también se cae |
 > | Beat separado | Si el worker se cae, el Beat sigue enviando tareas a la cola |
 >
-> En producción: siempre dos procesos independientes.
+> En producción con recursos: siempre dos procesos independientes.
 > En desarrollo: `worker -B` es aceptable por comodidad.
+>
+> ⚠️ **En nuestro despliegue (Render Free) se usa `worker --beat`:** el plan
+> gratuito no tiene Background Workers, así que worker y Beat viven dentro
+> del contenedor web (igual que el worker de W16). Es una decisión
+> consciente: si el contenedor se reinicia, ambos se reinician juntos.
+> Lo importante es que exista **una sola instancia** del servicio.
 >
 > **¿Riesgo de usar SendGrid real en CI/CD?**
 > Sí: cada ejecución del pipeline enviaría correos reales a las
@@ -60,8 +66,8 @@ Al terminar W18, el estudiante será capaz de:
 1. Agregar la tarea `reporte_ventas_diario` con agregación SQL
 2. Crear el template HTML del reporte de ventas
 3. Configurar `CELERY_BEAT_SCHEDULE` con `crontab` y `timedelta`
-4. Agregar el servicio `celery_beat` a `docker-compose.yml`
-5. Ejecutar Beat y verificar las tareas programadas
+4. Embeber Beat en el worker de Render (`docker-entrypoint.sh`)
+5. Verificar Beat en los Logs de Render y recibir el reporte por correo
 6. Ejecutar el Sprint 5 Review y declarar el Hito M6
 7. Completar la ficha Schmelkes E6
 
@@ -73,7 +79,8 @@ Al terminar W18, el estudiante será capaz de:
 |---|---|---|
 | `celery.schedules.crontab` | ✅ Nuevo | Programa tareas en horas exactas (como cron de Unix) |
 | `CELERY_BEAT_SCHEDULE` | ✅ Nuevo | Diccionario de tareas periódicas en `settings.py` |
-| Celery Beat (proceso) | ✅ Nuevo | Proceso que envía tareas programadas al broker |
+| Celery Beat (`worker --beat`) | ✅ Nuevo | Scheduler embebido en el worker de Render |
+| `REPORTE_DIARIO_HORA` | ✅ Nuevo | Hora del reporte configurable desde Render (HH:MM, hora MX) |
 | `annotate` + `Sum(F())` | ✅ Nuevo | Agregación SQL para totales de ventas |
 | `django.utils.timezone.now()` | ya usado | Fecha/hora actual en zona horaria configurada |
 
@@ -87,9 +94,9 @@ Al terminar W18, el estudiante será capaz de:
 | Parte 1 | Template `reporte_ventas.html` + `.txt` | 20 min |
 | Parte 2 | Tarea `reporte_ventas_diario` en `ventas/tasks.py` | 25 min |
 | Parte 3 | `CELERY_BEAT_SCHEDULE` en `settings.py` | 15 min |
-| Parte 4 | Agregar `celery_beat` en `docker-compose.yml` | 10 min |
-| Parte 5 | Arrancar Beat + verificar ejecución | 15 min |
-| Parte 6 | Tests W18 (8 pruebas) | 20 min |
+| Parte 4 | Beat embebido en Render + dependencias | 10 min |
+| Parte 5 | Verificar en local (EAGER) y en Render | 15 min |
+| Parte 6 | Tests W18 (12 pruebas) | 20 min |
 | **Commit parcial** | Punto de control seguro | 5 min |
 | Parte 7 | Sprint 5 Review ante el asesor | 20 min |
 | Parte 8 | Sprint 5 Retrospectiva + Ficha Schmelkes E6 | 20 min |
@@ -129,7 +136,12 @@ python manage.py check
 python manage.py test tests --verbosity=0
 ```
 
-**Resultado esperado:** `System check identified no issues` · `Ran 163 tests … OK`
+**Resultado esperado:** `System check identified no issues` · `Ran 159 tests`
+
+> 🐳 **Sin Docker Desktop:** igual que en W16–W17, en el laboratorio no hay
+> Redis ni worker: con `REDIS_URL` vacía todo corre en modo **EAGER**.
+> Beat solo existe en Render. Si la suite muestra fallas en W01/W02/W03/
+> W08/W12, ver la sección 6.4 (se corrigen en esta semana).
 
 ---
 
@@ -313,7 +325,7 @@ python manage.py test tests --verbosity=0
     </div>
 
     <div class="footer">
-        <p>Generado automáticamente por ERP Django a las 8:00 AM</p>
+        <p>Generado automáticamente por ERP Django a las {{ hora_programada }} (hora de México)</p>
         <p>{{ config.nombre_empresa }}</p>
     </div>
 
@@ -321,6 +333,9 @@ python manage.py test tests --verbosity=0
 </body>
 </html>
 ```
+
+> El pie muestra `{{ hora_programada }}` (la hora configurada en
+> `REPORTE_DIARIO_HORA`) en lugar de un "8:00 AM" fijo.
 
 ---
 
@@ -348,7 +363,7 @@ Sin ventas registradas hoy.
 Panel de administración: {{ url_admin }}
 
 ───────────────────────────────────────────
-Generado automáticamente a las 8:00 AM
+Generado automáticamente a las {{ hora_programada }} (hora de México)
 ERP Django · {{ config.nombre_empresa }}
 ```
 
@@ -386,10 +401,11 @@ permitiendo que la multiplicación ocurra directamente en SQL.
 
 ### 2.2 Agregar `reporte_ventas_diario` a `ventas/tasks.py`
 
-Agregar al final del archivo `ventas/tasks.py` (después de `_enviar_alerta_stock`):
+Agregar al final del archivo `ventas/tasks.py` (después de `_enviar_alerta_stock`).
+Reutiliza `_url_absoluta()` e `_items_con_subtotal()` de W17:
 
 ```python
-# ventas/tasks.py — agregar al final del archivo
+# ── W18: reporte diario (Celery Beat) ─────────────────────────────────────
 
 @shared_task(
     bind=True,
@@ -399,7 +415,8 @@ Agregar al final del archivo `ventas/tasks.py` (después de `_enviar_alerta_stoc
 def reporte_ventas_diario(self) -> dict:
     """Genera y envía el reporte diario de ventas al administrador.
 
-    Se ejecuta automáticamente a las 8:00 AM todos los días
+    Se ejecuta automáticamente todos los días a la hora de
+    settings.REPORTE_DIARIO_HORA (default 08:00, hora de México)
     mediante Celery Beat (configurado en CELERY_BEAT_SCHEDULE).
 
     Cálculos realizados en SQL (no en Python) para máxima eficiencia:
@@ -434,7 +451,12 @@ def reporte_ventas_diario(self) -> dict:
     )['total'] or Decimal('0.00')
 
     # ── 2. Top 5 productos por ingreso del día ─────────────────────────
-    top_productos = list(
+    # Dos fuentes: ventas internas (DetalleVenta) y compras de la tienda
+    # en línea (Pedido.items_snapshot). El checkout NO crea Venta, así
+    # que sin la segunda fuente las compras en línea nunca aparecían.
+    acumulado = {}   # nombre → {'unidades': int, 'ingreso': Decimal}
+
+    internas = (
         DetalleVenta.objects
         .filter(venta__fecha__date=hoy)
         .values(nombre=F('producto__nombre'))
@@ -447,8 +469,32 @@ def reporte_ventas_diario(self) -> dict:
                 )
             )
         )
-        .order_by('-ingreso')[:5]
     )
+    for fila in internas:
+        dato = acumulado.setdefault(
+            fila['nombre'], {'unidades': 0, 'ingreso': Decimal('0.00')}
+        )
+        dato['unidades'] += fila['unidades'] or 0
+        dato['ingreso']  += fila['ingreso'] or Decimal('0.00')
+
+    for pedido in pedidos_hoy.only('items_snapshot'):
+        for item in _items_con_subtotal(pedido.items_snapshot):
+            dato = acumulado.setdefault(
+                item.get('nombre', '¿?'),
+                {'unidades': 0, 'ingreso': Decimal('0.00')},
+            )
+            dato['unidades'] += item['cantidad']
+            dato['ingreso']  += item['subtotal']
+
+    top_productos = sorted(
+        (
+            {'nombre': nombre, 'unidades': d['unidades'],
+             'ingreso': str(d['ingreso'].quantize(Decimal('0.01')))}
+            for nombre, d in acumulado.items()
+        ),
+        key=lambda x: Decimal(x['ingreso']),
+        reverse=True,
+    )[:5]
 
     logger.info(
         f'[reporte_diario] {hoy}: {total_pedidos} pedidos, '
@@ -482,9 +528,7 @@ def _enviar_reporte_ventas(
         top_productos:   Lista de dicts con nombre, unidades, ingreso.
         config:          Instancia de ConfiguracionERP.
     """
-    url_admin = (
-        'https://erp-django-utec.onrender.com/admin/ventas/venta/'
-    )
+    url_admin = _url_absoluta('admin:ventas_pedido_changelist')
     fecha_str = fecha.strftime('%d/%m/%Y')
 
     contexto = {
@@ -494,6 +538,7 @@ def _enviar_reporte_ventas(
         'total_facturado': total_facturado,
         'top_productos':   top_productos,
         'url_admin':       url_admin,
+        'hora_programada': settings.REPORTE_DIARIO_HORA,
     }
 
     asunto      = f'Reporte de ventas del {fecha_str} — {config.nombre_empresa}'
@@ -517,17 +562,45 @@ def _enviar_reporte_ventas(
         logger.error(f'[reporte_diario] Error al enviar reporte: {exc}')
 ```
 
+> ⚠️ **Correcciones respecto a la versión anterior de la guía:**
+> - **Top 5 con dos fuentes.** El checkout de la tienda (W13–W15) crea un
+>   `Pedido`, **nunca** una `Venta`. Si el Top solo consulta `DetalleVenta`,
+>   las compras en línea no aparecen jamás. Las ventas internas se agregan
+>   en SQL (`annotate` + `Sum(F() * F())`); las de la tienda vienen de
+>   `items_snapshot` (JSON) y se suman en Python con `Decimal`.
+> - `ingreso` se devuelve como texto (`'199.50'`): el resultado viaja como
+>   JSON por Redis y así no hay problemas con `Decimal`.
+> - **Sin URL fija** `erp-django-utec.onrender.com`: `_url_absoluta()` usa
+>   `SITE_URL` (en Render, `RENDER_EXTERNAL_URL`).
+> - El reporte resume el **día en curso**. Si se programa a primera hora,
+>   casi siempre saldrá en cero: para un corte del día anterior habría que
+>   usar `hoy - timedelta(days=1)`.
+
 ---
 
 ## PARTE 3 — `CELERY_BEAT_SCHEDULE` en `settings.py` (15 min)
 
-### 3.1 Agregar al final de `core/settings.py`
+### 3.1 Imports al inicio de `core/settings.py`
 
 ```python
-# core/settings.py — agregar después de CELERY_TASK_ALWAYS_EAGER:
-
-# ── CELERY BEAT — Tareas programadas ──────────────────────────────────────
+# core/settings.py — junto a los demás imports, al inicio del archivo:
 from celery.schedules import crontab
+from datetime import timedelta   # ← necesario para CELERY_BEAT_SCHEDULE
+```
+
+> Los imports van **al inicio** (PEP 8), no a mitad del archivo como
+> sugería la versión anterior.
+
+### 3.2 Agregar después del bloque `CELERY_*` de W16
+
+```python
+# Hora del reporte diario (hora de México), configurable sin tocar código:
+#   Render → Environment → REPORTE_DIARIO_HORA=10:00
+REPORTE_DIARIO_HORA = env('REPORTE_DIARIO_HORA', default='08:00')
+try:
+    _rep_h, _rep_m = (int(x) for x in REPORTE_DIARIO_HORA.split(':'))
+except ValueError:
+    _rep_h, _rep_m = 8, 0
 
 CELERY_BEAT_SCHEDULE = {
 
@@ -539,10 +612,10 @@ CELERY_BEAT_SCHEDULE = {
         'options':  {'queue': 'erp_django'},
     },
 
-    # Reporte de ventas diario a las 8:00 AM (hora México)
+    # Reporte de ventas diario (default 8:00 AM hora México)
     'reporte-ventas-diario-8am': {
         'task':     'ventas.reporte_ventas_diario',
-        'schedule': crontab(hour=8, minute=0),
+        'schedule': crontab(hour=_rep_h, minute=_rep_m),
         'options':  {'queue': 'erp_django'},
     },
 
@@ -553,45 +626,143 @@ CELERY_BEAT_TIMEZONE = TIME_ZONE   # 'America/Mexico_City'
 ```
 
 > **`crontab(hour=8, minute=0)`** equivale a la expresión cron `0 8 * * *`:
-> ejecutar exactamente a las 8:00 AM todos los días.
+> ejecutar exactamente a las 8:00 AM todos los días, **hora de México**
+> gracias a `CELERY_TIMEZONE = TIME_ZONE`.
 >
-> **`timedelta(hours=1)`** equivale a `crontab(minute=0)` pero
-> más legible cuando se trata de intervalos, no de horas exactas.
-
----
-
-### 3.2 Agregar el import de `timedelta` al inicio de `settings.py`
-
-```python
-# core/settings.py — verificar que existe al inicio:
-from datetime import timedelta   # ← agregar si no está
-
-# (ya debería estar si se instaló dj-database-url en W03)
-```
+> **`REPORTE_DIARIO_HORA`** permite probar sin esperar al día siguiente:
+> en Render se pone `10:00` (o la hora actual + 10 min) y se guarda.
+>
+> **`timedelta(hours=1)`** es un intervalo: cuenta una hora desde que Beat
+> arranca, no "en punto".
 
 ### 3.3 Verificar
 
 ```cmd
 python manage.py check
+python -c "import django,os;os.environ['DJANGO_SETTINGS_MODULE']='core.settings';django.setup();from django.conf import settings as s;print(s.CELERY_BEAT_SCHEDULE['reporte-ventas-diario-8am']['schedule'])"
 ```
 
-**Resultado esperado:** `System check identified no issues (0 silenced).`
+**Resultado esperado:**
+```
+System check identified no issues (0 silenced).
+<crontab: 0 8 * * * (m/h/dM/MY/d)>
+```
 
 ---
 
-## PARTE 4 — Agregar `celery_beat` a `docker-compose.yml` (10 min)
+## PARTE 4 — Beat embebido en Render + Dependencias (10 min)
 
-### 4.1 Agregar el servicio de Beat
+> La versión anterior de esta guía agregaba un servicio `celery_beat` a
+> `docker-compose.yml` con `django_celery_beat` (paquete que el proyecto
+> **no** tiene instalado). Sin Docker Desktop y con Render Free, Beat se
+> arranca dentro del worker embebido de W16.
 
-Abrir `docker-compose.yml` y agregar el nuevo servicio después de `celery_worker`:
+### 4.1 `docker-entrypoint.sh` — worker con `--beat`
+
+Reemplazar el bloque del worker embebido de W16 por:
+
+```sh
+# ── W16: worker de Celery embebido (opción gratuita de Render) ───────
+# Render Free no ofrece Background Workers: el worker corre en segundo
+# plano dentro del mismo contenedor que Gunicorn.
+#   --pool=solo           → un solo proceso (cabe en 512 MB)
+#   --without-gossip/mingle/heartbeat → menos conexiones a Redis
+# Se activa con CELERY_EMBEDDED_WORKER=1 y requiere REDIS_URL.
+#
+# W18: Beat (tareas programadas) también va embebido con --beat, porque
+# Render Free no tiene Background Workers. Solo debe existir UN Beat:
+# el servicio web debe tener 1 instancia. Se desactiva con
+# CELERY_EMBEDDED_BEAT=0. El archivo del schedule va a /tmp (disco efímero).
+if [ "${CELERY_EMBEDDED_WORKER:-0}" = "1" ] && [ -n "${REDIS_URL:-}" ]; then
+    BEAT_OPTS=""
+    if [ "${CELERY_EMBEDDED_BEAT:-1}" = "1" ]; then
+        BEAT_OPTS="--beat --schedule=/tmp/celerybeat-schedule"
+        echo "==> [entrypoint] Celery Beat embebido ACTIVADO (reporte diario ${REPORTE_DIARIO_HORA:-08:00} hora MX)."
+    fi
+    echo "==> [entrypoint] Iniciando worker de Celery embebido (cola erp_django)..."
+    # shellcheck disable=SC2086
+    celery -A core worker \
+        --loglevel=info \
+        --queues=erp_django \
+        --pool=solo \
+        --without-gossip --without-mingle --without-heartbeat \
+        $BEAT_OPTS &
+else
+    echo "==> [entrypoint] Worker de Celery embebido DESACTIVADO."
+fi
+```
+
+> `--schedule=/tmp/...`: el archivo donde Beat recuerda la última ejecución
+> va en `/tmp` porque el disco de Render es efímero.
+
+### 4.2 `render.yaml` — variables de W18
+
+```yaml
+      # W18: Celery Beat embebido (tareas programadas). UNA sola instancia.
+      - key: CELERY_EMBEDDED_BEAT    # 1 = worker arranca con --beat
+        value: "1"
+      - key: REPORTE_DIARIO_HORA     # HH:MM hora de México (crontab)
+        value: "08:00"
+```
+
+### 4.3 ⚠️ Dependencias: `kombu` compatible con `redis==5.0.1`
+
+Si `requirements.txt` se regeneró con `pip freeze`, puede traer
+`kombu==5.7.0`, que exige `redis>=6.1`. En Render **ninguna tarea llega a
+Redis** y el webhook registra:
+
+```
+kombu.exceptions.VersionMismatch: Redis transport requires redis-py
+versions 6.1.0 or later. You have 5.0.1
+```
+
+En el laboratorio no se nota (modo EAGER no usa Redis). Corrección:
+
+```cmd
+pip install "kombu==5.3.7"
+pip check
+```
+
+y en `requirements.txt` dejar `kombu==5.3.7` (editar a mano, en UTF-8).
+La prueba `tests/test_w18_dependencias.py` (Parte 6) detecta este error.
+
+### 4.4 Variables de entorno en Render (Environment)
+
+| Variable | Valor | Error frecuente |
+|---|---|---|
+| `CELERY_EMBEDDED_WORKER` | `1` | — |
+| `CELERY_EMBEDDED_BEAT` | **`1`** | Poner la hora aquí (`10:00`): Beat **no arranca** |
+| `REPORTE_DIARIO_HORA` | `08:00` (pruebas: `10:00`) | Formato distinto de `HH:MM` → vuelve a 08:00 |
+| `REDIS_URL` | Internal Key Value URL | — |
+| `SENDGRID_API_KEY` | `SG....` | Sin ella el correo solo se imprime en los Logs |
+| `DEFAULT_FROM_EMAIL` | `ERP Django <correo-del-From-verificado>` | Usar el **Reply-To** del Sender → SendGrid 403 |
+| `ADMIN_EMAIL` | correo que recibe reporte y alertas | Errores de dedo en el dominio |
+
+### 4.5 Render Free se duerme
+
+El servicio gratuito se suspende tras ~15 min sin tráfico. **Dormido, Beat
+no dispara** y Celery no recupera una ejecución perdida. Para el reporte
+diario crear un monitor gratuito (UptimeRobot o cron-job.org) que haga
+`GET https://TU-SERVICIO.onrender.com/` cada 10 minutos.
+
+### 4.6 `docker-compose.yml` (opcional — solo con Docker Desktop)
+
+En el laboratorio **no se usa**. Si algún equipo tiene Docker Desktop, el
+stack local de W16 se completa con un servicio `celery_beat`, después de
+`celery_worker`:
 
 ```yaml
   # ── Celery Beat — Scheduler de tareas programadas — W18 ────────────
+  # Beat NUNCA debe tener múltiples réplicas (un solo scheduler).
+  # Scheduler por defecto (archivo), igual que en Render: el proyecto no
+  # instala django_celery_beat. En Render, Beat va embebido en el worker
+  # (docker-entrypoint.sh, CELERY_EMBEDDED_BEAT=1); aquí es un servicio aparte.
   celery_beat:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
-    # Beat NUNCA debe tener múltiples réplicas (un solo scheduler)
-    command: celery -A core beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    command: celery -A core beat -l info --schedule=/tmp/celerybeat-schedule
     volumes:
       - .:/app
     depends_on:
@@ -599,80 +770,27 @@ Abrir `docker-compose.yml` y agregar el nuevo servicio después de `celery_worke
         condition: service_healthy
       db:
         condition: service_healthy
+    env_file:
+      - .env                             # REPORTE_DIARIO_HORA, ADMIN_EMAIL...
     environment:
       DJANGO_SETTINGS_MODULE: core.settings_prod
-      SECRET_KEY:             dev-clave-docker-no-usar-en-produccion
-      DATABASE_URL:           postgres://erp_user:erp_pass_local@db:5432/erp_db
-      REDIS_URL:              redis://redis:6379/0
+      DATABASE_URL: postgresql://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-12345}@db:5432/${POSTGRES_DB:-erp_db}
+      REDIS_URL: redis://redis:6379/0
 ```
 
-> **Nota de producción:** `celery beat` nunca debe tener más de
-> **una instancia corriendo simultáneamente**. Si se despliega con
-> múltiples réplicas, las tareas se programarían duplicadas.
-> En Render.com, configurar el Beat como un servicio independiente
-> con `numInstances: 1` en `render.yaml`.
+> ⚠️ La versión anterior de esta guía usaba
+> `--scheduler django_celery_beat.schedulers:DatabaseScheduler` (paquete
+> **no instalado** → Beat no arranca), credenciales `erp_user/erp_pass_local`
+> que no coinciden con el servicio `db` (`.env`) y no cargaba `.env`
+> (sin `SENDGRID_API_KEY` ni `ADMIN_EMAIL`). Se corrigió con el mismo
+> patrón que `celery_worker`. El servicio `web` mantiene
+> `CELERY_EMBEDDED_WORKER: "0"`, así que nunca hay dos Beat.
 
 ---
 
-## PARTE 5 — Arrancar Beat y Verificar (15 min)
+## PARTE 5 — Verificar en Local (EAGER) y en Render (15 min)
 
-### 5.1 Iniciar todos los procesos
-
-Necesitas **4 terminales** simultáneas:
-
-```
-Terminal 1 (Django):
-    cd C:\Temp_Workspace_ERP
-    call env_erp\Scripts\activate
-    python manage.py runserver
-
-Terminal 2 (Worker):
-    cd C:\Temp_Workspace_ERP
-    call env_erp\Scripts\activate
-    celery -A core worker -l info -Q erp_django
-
-Terminal 3 (Beat):
-    cd C:\Temp_Workspace_ERP
-    call env_erp\Scripts\activate
-    celery -A core beat -l info
-
-Terminal 4 (Flower — opcional):
-    cd C:\Temp_Workspace_ERP
-    call env_erp\Scripts\activate
-    celery -A core flower --port=5555
-```
-
-**Alternativa en desarrollo (solo 2 terminales):**
-
-```cmd
-:: Terminal 2 (worker + beat combinados — solo para desarrollo)
-celery -A core worker -B -l info -Q erp_django
-```
-
-### 5.2 Salida esperada del proceso Beat
-
-```
-celery beat v5.3.6 (emerald-rush) is starting.
-__    -    ... __   -        _
-Configuration ->
-    . broker -> redis://localhost:6379/0
-    . loader -> celery.loaders.app.AppLoader
-    . scheduler -> celery.beat.PersistentScheduler
-    . db -> celerybeat-schedule.db
-    . logfile -> [stderr]@%INFO
-    . maxinterval -> 5.00 minutes (300s)
-
-[2025-01-15 08:00:00,000: INFO/MainProcess]
-    Scheduler: Sending due task reporte-ventas-diario-8am
-    (ventas.reporte_ventas_diario)
-[2025-01-15 09:00:00,000: INFO/MainProcess]
-    Scheduler: Sending due task verificar-stock-bajo-cada-hora
-    (ventas.verificar_stock_bajo)
-```
-
-### 5.3 Forzar ejecución inmediata para verificar (desarrollo)
-
-Para no esperar hasta las 8:00 AM:
+### 5.1 En el laboratorio: ejecutar las tareas sin worker
 
 ```cmd
 python manage.py shell
@@ -681,22 +799,94 @@ python manage.py shell
 ```python
 from ventas.tasks import reporte_ventas_diario, verificar_stock_bajo
 
-# Ejecutar sincrónicamente (sin worker)
-r1 = reporte_ventas_diario.apply()
-print('Reporte:', r1.get())
-
-r2 = verificar_stock_bajo.apply(args=(3,))
-print('Stock bajo:', r2.get())
+# Modo EAGER: se ejecutan en el mismo proceso; el correo sale en la terminal
+print('Reporte:', reporte_ventas_diario.delay().get())
+print('Stock bajo:', verificar_stock_bajo.delay(100).get()['total'])  # umbral alto
 ```
 
-### 5.4 Verificar en Flower
+No se arrancan worker ni Beat en el laboratorio (no hay Redis).
+
+### 5.2 En Render: Logs al desplegar
 
 ```
-[ ] http://localhost:5555 → Workers: [celery@PC online]
-[ ] Pestaña "Tasks" → ventas.reporte_ventas_diario: SUCCESS
-[ ] Pestaña "Tasks" → ventas.verificar_stock_bajo: SUCCESS
-[ ] Correo de reporte visible en la terminal de Django (backend consola)
+==> [entrypoint] Celery Beat embebido ACTIVADO (reporte diario 10:00 hora MX).
+==> [entrypoint] Iniciando worker de Celery embebido (cola erp_django)...
+[... INFO/Beat] beat: Starting...
+[... INFO/MainProcess] Connected to redis://red-xxxxxxxxxxxx:6379//
+[... INFO/MainProcess] celery@srv-xxxxxxxx ready.
 ```
+
+Si aparece `Celery Beat embebido` pero no `beat: Starting...`, revisar
+`CELERY_EMBEDDED_BEAT=1`. Si aparece `VersionMismatch`, ver 4.3.
+
+### 5.3 Probar el reporte sin esperar al día siguiente
+
+1. Render → Environment → `REPORTE_DIARIO_HORA` = hora actual + 10 min
+   (p. ej. `10:00`) → **Save** (Render redespliega).
+2. Mantener el servicio despierto (4.5).
+3. A la hora indicada, en los Logs:
+   ```
+   Scheduler: Sending due task reporte-ventas-diario-8am (ventas.reporte_ventas_diario)
+   Task ventas.reporte_ventas_diario[...] succeeded in 1.2s: {'fecha': '...', ...}
+   ```
+4. El correo *"Reporte de ventas del DD/MM/AAAA — Mi Empresa ERP"* llega a
+   `ADMIN_EMAIL` (revisar Spam).
+5. Regresar `REPORTE_DIARIO_HORA` a `08:00`.
+
+### 5.4 Recuperar correos de confirmación no enviados
+
+Si un pedido quedó **pagado** sin correo (p. ej. Redis caído o la falla de
+4.3), el webhook no lo reenvía (ya estaba pagado). En
+**Admin → Pedidos** filtrar *Correo de confirmación enviado = No*,
+seleccionar y elegir la acción **"Enviar correo de confirmación
+(pagados sin correo)"**. Render Free no tiene Shell, así que esta es
+la vía de recuperación.
+
+Agregar en `ventas/admin.py` (clase `PedidoAdmin`):
+
+```python
+    list_display   = ['numero_pedido', 'cliente', 'estado',
+                      'fecha_pedido', 'total_pagado', 'correo_enviado']
+    search_fields  = ['numero_pedido', 'cliente__nombre']
+    list_filter    = ['estado', 'correo_enviado']
+    readonly_fields = ['fecha_pedido']
+    actions        = ['reenviar_confirmacion']
+
+    @admin.action(description='Enviar correo de confirmación (pagados sin correo)')
+    def reenviar_confirmacion(self, request, queryset):
+        """Encola el correo de los pedidos pagados que aún no lo recibieron.
+
+        Útil si el envío falló (p. ej. Redis/SendGrid caídos): Render Free
+        no tiene Shell. La tarea es idempotente (correo_enviado).
+        """
+        from django.contrib import messages
+        from ventas.tasks import enviar_confirmacion_pedido
+
+        pendientes = queryset.filter(estado='pagado', correo_enviado=False)
+        encolados, errores = 0, 0
+        for pedido in pendientes:
+            try:
+                enviar_confirmacion_pedido.delay(pedido.pk)
+                encolados += 1
+            except Exception as exc:   # Redis caído, etc.
+                errores += 1
+                self.message_user(
+                    request, f'{pedido.numero_pedido}: {exc}', messages.ERROR
+                )
+        omitidos = queryset.count() - pendientes.count()
+        self.message_user(
+            request,
+            f'Correos encolados: {encolados}. Errores: {errores}. '
+            f'Omitidos (no pagados o ya enviados): {omitidos}.',
+            messages.SUCCESS if not errores else messages.WARNING,
+        )
+```
+
+### 5.5 Flower
+
+`flower==2.0.1` está instalado, pero en Render Free no se expone (sería un
+segundo servicio web). En producción las tareas se monitorean con los
+**Logs** del worker (`Task ... succeeded`).
 
 ---
 
@@ -840,98 +1030,203 @@ class ReporteVentasTest(TestCase):
         self.assertIn('total_facturado', resultado)
         self.assertIn('top_productos',   resultado)
         self.assertGreaterEqual(resultado['total_pedidos'], 0)
+
+
+# ── Regresión (2026-11-20): compras en línea y hora configurable ─────────
+
+@override_settings(**EMAIL_SETTINGS)
+class ReporteTiendaEnLineaTest(TestCase):
+    """El checkout solo crea Pedido (no Venta): el top debe incluirlo."""
+
+    def setUp(self):
+        mail.outbox = []
+        ConfiguracionERP.get_instance()
+        cli = Cliente.objects.create(nombre='Cliente Web', correo='web@test.com')
+        Pedido.objects.create(
+            numero_pedido  = 'PED-WEB-001',
+            cliente        = cli,
+            estado         = 'pagado',
+            total_pagado   = Decimal('231.42'),
+            items_snapshot = [
+                {'producto_id': 1, 'nombre': 'Vino Web',
+                 'cantidad': 2, 'precio': '99.75'},
+            ],
+        )
+
+    def test_top_incluye_productos_de_pedidos_en_linea(self):
+        resultado = reporte_ventas_diario.delay().get()
+        self.assertEqual(resultado['total_pedidos'], 1)
+        self.assertEqual(
+            resultado['top_productos'],
+            [{'nombre': 'Vino Web', 'unidades': 2, 'ingreso': '199.50'}],
+        )
+        self.assertIn('Vino Web', mail.outbox[0].body)
+
+
+class HoraReporteConfigurableTest(TestCase):
+    """La hora del crontab sale de REPORTE_DIARIO_HORA (hora de México)."""
+
+    def test_crontab_coincide_con_reporte_diario_hora(self):
+        h, m = (int(x) for x in settings.REPORTE_DIARIO_HORA.split(':'))
+        cron = settings.CELERY_BEAT_SCHEDULE['reporte-ventas-diario-8am']['schedule']
+        self.assertEqual(cron.hour, {h})
+        self.assertEqual(cron.minute, {m})
+        self.assertEqual(settings.CELERY_TIMEZONE, 'America/Mexico_City')
 ```
 
-### 6.2 Ejecutar los tests
+### 6.2 Crear `tests/test_w18_dependencias.py`
+
+```python
+"""Regresión 2026-11-20 — compatibilidad kombu ↔ redis-py.
+
+En Render el webhook fallaba con:
+    kombu.exceptions.VersionMismatch: Redis transport requires
+    redis-py versions 6.1.0 or later. You have 5.0.1
+porque requirements.txt tenía kombu==5.7.0 con redis==5.0.1.
+En el laboratorio no se notaba: sin REDIS_URL todo corre en modo EAGER.
+
+Esta prueba abre el transporte Redis contra un puerto cerrado: debe
+fallar por CONEXIÓN (no hay Redis local), nunca por versión.
+"""
+from django.test import SimpleTestCase
+from kombu import Connection
+from kombu.exceptions import VersionMismatch
+
+
+class KombuRedisCompatibilidadTest(SimpleTestCase):
+
+    def test_transporte_redis_acepta_version_de_redis_py(self):
+        conexion = Connection('redis://127.0.0.1:6399/0', connect_timeout=1)
+        try:
+            conexion.ensure_connection(max_retries=1, interval_start=0, interval_step=0)
+            conexion.default_channel
+        except VersionMismatch as exc:
+            self.fail(f'kombu y redis-py incompatibles: {exc}')
+        except Exception:
+            pass   # esperado: no hay Redis en el laboratorio
+        finally:
+            conexion.release()
+
+
+from decimal import Decimal
+
+from django.contrib.auth import get_user_model
+from django.core import mail
+from django.test import TestCase, override_settings
+
+from clientes.models      import Cliente
+from configuracion.models import ConfiguracionERP
+from ventas.models        import Pedido
+
+
+@override_settings(
+    EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend',
+    CELERY_TASK_ALWAYS_EAGER=True,
+)
+class AccionReenviarConfirmacionTest(TestCase):
+    """Acción del admin: enviar correo a pagados con correo_enviado=False."""
+
+    def setUp(self):
+        ConfiguracionERP.get_instance()
+        self.admin = get_user_model().objects.create_superuser(
+            'root', 'root@test.com', 'x')
+        self.client.force_login(self.admin)
+        cli = Cliente.objects.create(nombre='C', correo='c@test.com')
+        self.pagado = Pedido.objects.create(
+            numero_pedido='PED-A-1', cliente=cli, estado='pagado',
+            total_pagado=Decimal('30.16'))
+        self.pendiente = Pedido.objects.create(
+            numero_pedido='PED-A-2', cliente=cli, estado='pendiente')
+
+    def test_envia_solo_pagados_sin_correo(self):
+        resp = self.client.post('/admin/ventas/pedido/', {
+            'action': 'reenviar_confirmacion',
+            '_selected_action': [self.pagado.pk, self.pendiente.pk],
+        })
+        self.assertEqual(resp.status_code, 302)   # la acción redirige a la lista
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn('PED-A-1', mail.outbox[0].subject)
+        self.pagado.refresh_from_db()
+        self.assertTrue(self.pagado.correo_enviado)
+```
+
+### 6.3 Ejecutar los tests
 
 ```cmd
-python manage.py test tests.test_w18_beat --verbosity=2
+python manage.py test tests.test_w18_beat tests.test_w18_dependencias --verbosity=2
 ```
 
-**Resultado esperado:**
-```
-test_beat_schedule_tiene_reporte_diario ... ok
-test_beat_schedule_tiene_verificar_stock ... ok
-test_reporte_asunto_contiene_fecha ... ok
-test_reporte_devuelve_dict_con_totales ... ok
-test_reporte_envia_correo_al_admin ... ok
-test_reporte_sin_ventas_hoy_envia_correo ... ok
-test_reporte_usa_crontab ... ok
-test_verificar_stock_usa_timedelta ... ok
+**Resultado esperado:** `Ran 12 tests … OK` (10 de Beat/reporte + 2 de
+dependencias y acción del admin).
 
-Ran 8 tests in X.XXXs
-OK
-```
+### 6.4 Suite acumulada — Hito M6 (en verde)
 
-### 6.3 Suite acumulada — Hito M6
+Antes de W18 la suite arrastraba 11 fallas heredadas. Se corrigen así:
+
+| Prueba | Causa | Corrección |
+|---|---|---|
+| W01 `/clientes/` → 404 | Desde W07 la lista vive en `/clientes/lista/` (enlace del menú del admin roto) | `clientes/urls.py`: `path('', ClienteListView, name='inicio')` |
+| W02 (4) `<app>:inicio` / `index.html` | W07 reemplazó las vistas `index` por CBV | Pruebas → `<app>:lista` / `<app>/lista.html` |
+| W03 ficha E1 | Faltaba `fichas/espiral_01_infra.md` | Crear la ficha (plantilla de W03) |
+| W08 (2) mensajes en inglés | `LANGUAGE_CODE='es-mx'` y `assertFormError` de Django 4.2 | Validar `form.errors[campo]`, no el texto |
+| W12 (3) `libgobject` | WeasyPrint necesita GTK; el `import` iba antes del 404 | Import después de `get_object_or_404`; `skipUnless` en las 2 pruebas que generan PDF |
 
 ```cmd
 python manage.py test tests --verbosity=0
 ```
 
-**Resultado esperado:** `Ran 171 tests in X.XXXs · OK` (163 + 8)
+**Resultado esperado:** `Ran 171 tests … OK (skipped=2)`
+(los 2 omitidos generan PDF y corren en Docker/Render).
 
 ### COMMIT PARCIAL
 
 ```cmd
 git add .
-git commit -m "Sprint 5 W18: Beat + reporte_diario + crontab + 171 tests OK [pre-M6]"
+git commit -m "Sprint 5 W18: Beat embebido + reporte_diario + kombu 5.3.7 + 171 tests OK [pre-M6]"
 ```
 
 ---
 
 ## PARTE 7 — Sprint 5 Review ante el asesor (20 min)
 
-### Guión de demo (≤ 10 min en vivo)
+### Guión de demo (≤ 10 min en vivo, sobre Render)
 
 ```
-1. Mostrar los 3 procesos activos:
-   → Terminal 1: Django runserver (servidor web)
-   → Terminal 2: Celery worker (ejecuta tareas)
-   → Terminal 3: Celery Beat (programa tareas)
-   → Flower en http://localhost:5555
+1. Logs de Render: beat: Starting... · Connected to redis://... · celery@... ready.
 
-2. Demostrar envío de correo de confirmación:
-   → Completar una compra con tarjeta 4242
-   → En terminal del worker: "[correo_confirmacion] Correo enviado a..."
-   → En terminal de Django: correo impreso (backend consola)
+2. Correo de confirmación:
+   → Compra en https://TU-SERVICIO.onrender.com/catalogo/ con tarjeta 4242
+   → Logs: Webhook recibido: payment_intent.succeeded
+           Task ventas.enviar_confirmacion_pedido[...] succeeded ... 'estado': 'ok'
+   → Bandeja: "Confirmación de pedido PED-AAAA-NNNN — ..."
+   → Admin → Pedidos: Correo de confirmación enviado ✔
 
-3. Demostrar reporte de ventas:
-   → python manage.py shell
-   → from ventas.tasks import reporte_ventas_diario
-   → reporte_ventas_diario.apply().get()
-   → Correo de reporte impreso en terminal con KPIs del día
+3. Reporte programado:
+   → REPORTE_DIARIO_HORA = hora actual + 10 min (5.3)
+   → Logs: Scheduler: Sending due task reporte-ventas-diario-8am
+   → Bandeja de ADMIN_EMAIL: "Reporte de ventas del DD/MM/AAAA — ..."
 
-4. Demostrar verificación de stock:
-   → from ventas.tasks import verificar_stock_bajo
-   → verificar_stock_bajo.apply(args=(100,)).get()  # umbral alto para forzar alerta
-   → Correo de alerta impreso en terminal
+4. Alerta de stock: verificar_stock_bajo corre cada hora (timedelta);
+   en local: verificar_stock_bajo.delay(100).get() → correo en la terminal
 
-5. Mostrar Flower:
-   → Workers online + 3 tareas ejecutadas en el historial
+5. Tests: python manage.py test tests --verbosity=0 → Ran 171 tests … OK
 
-6. Mostrar los tests:
-   → python manage.py test tests --verbosity=0
-   → Ran 171 tests … OK
-
-7. Declarar Sprint Goal y Hito M6 verificados:
-   "Celery activo + correo recibido + alerta de stock +
-    Beat programado (8:00 AM diario + cada hora)"
-   → Estado: ✅ HITO M6 ALCANZADO
+6. Declarar: "Celery activo + correo recibido + alerta de stock +
+   Beat programado (8:00 AM diario + cada hora)" → ✅ HITO M6 ALCANZADO
 ```
 
 ### Tabla de verificación M6
 
-| Criterio | Estado |
-|---|---|
-| `celery -A core worker` → procesa tareas | ✅ |
-| `celery -A core beat` → scheduler activo | ✅ |
-| Pago confirmado → correo de confirmación < 30 s | ✅ |
-| Stock bajo → alerta al admin | ✅ |
-| Reporte diario a las 8:00 AM (crontab) | ✅ |
-| Verificación de stock cada hora (timedelta) | ✅ |
-| Flower dashboard → workers + tareas visibles | ✅ |
-| 171 tests acumulados OK | ✅ |
+| Criterio | Evidencia | Estado |
+|---|---|---|
+| Worker embebido procesa tareas | Logs: `celery@... ready` + `Task ... succeeded` | ✅ |
+| Beat embebido activo | Logs: `beat: Starting...` | ✅ |
+| Pago confirmado → correo de confirmación | Correo recibido vía SendGrid | ✅ |
+| Stock bajo → alerta al admin | Test + correo local | ✅ |
+| Reporte diario por crontab | Correo recibido a la hora programada | ✅ |
+| Verificación de stock cada hora (timedelta) | `CELERY_BEAT_SCHEDULE` + test | ✅ |
+| Monitoreo de tareas | Logs del worker (Flower no se expone en Render Free) | ✅ |
+| 171 tests acumulados OK | `Ran 171 tests … OK (skipped=2)` | ✅ |
 
 ---
 
@@ -943,23 +1238,39 @@ git commit -m "Sprint 5 W18: Beat + reporte_diario + crontab + 171 tests OK [pre
 # Sprint 5 Retrospective — ERP Django
 ## Semanas W16–W18 · Espiral 6: Celery e Integraciones
 
-**Fecha:** ___/___/_____
+**Fecha:** 20/11/2026
 
 ## ¿Qué funcionó bien? (Keep)
-1. El campo correo_enviado en Pedido resolvió elegantemente el
-   problema de duplicados sin necesidad de un sistema externo de idempotencia.
-2. @override_settings(EMAIL_BACKEND=locmem) hizo los tests de correo
-   triviales: mail.outbox captura todo sin enviar nada.
-3. Separar beat de worker como procesos independientes es la
-   arquitectura correcta desde el inicio.
+1. El campo `correo_enviado` en `Pedido` resolvió los duplicados (reintentos
+   de Stripe y de Celery) sin un sistema externo de idempotencia.
+2. `@override_settings(EMAIL_BACKEND=locmem)` hizo triviales los tests de
+   correo: `mail.outbox` captura todo sin enviar nada.
+3. Modo EAGER sin `REDIS_URL`: el laboratorio sin Docker Desktop puede
+   desarrollar y probar todas las tareas sin Redis ni worker.
+4. El webhook como ÚNICO disparador del correo, con `try/except`: si Redis
+   falla, el pago queda registrado y Stripe recibe 200.
+5. Worker y Beat embebidos en el contenedor web: Celery funciona en el
+   plan gratuito de Render (sin Background Workers).
 
 ## ¿Qué mejorar? (Improve)
-1. Documentar mejor el procedimiento de arranque de los 4 procesos.
-2. Agregar health check a los servicios Celery en docker-compose.
+1. **Dependencias:** `pip freeze` subió `kombu` a 5.7.0, que exige
+   `redis>=6.1`, con `redis==5.0.1` fijo. En producción ninguna tarea
+   llegaba a Redis y en el laboratorio no se veía (EAGER no usa Redis).
+   Se fijó `kombu==5.3.7` y se agregó `tests/test_w18_dependencias.py`.
+2. **Variables de entorno:** valores capturados en el campo equivocado
+   (`CELERY_EMBEDDED_BEAT=10:00`, `DEFAULT_FROM_EMAIL` = Reply-To en vez
+   del From verificado). Revisar la tabla de variables antes de desplegar.
+3. **Render Free se duerme:** Beat no dispara mientras el servicio duerme;
+   se necesita un ping externo cada 10 min.
+4. **Pruebas antiguas desactualizadas:** 11 fallas heredadas de W01–W12
+   (rutas cambiadas en W07, mensajes en español, WeasyPrint sin GTK en
+   Windows, ficha E1 faltante). Corregidas en este cierre.
 
 ## Acción de mejora (Kaizen) para Sprint 6
-> "En el Sprint 6 (Dashboard), pre-calcularé los KPIs con annotate
->  desde el principio, sin iterar en Python."
+> "En el Sprint 6 no regeneraré `requirements.txt` con `pip freeze`:
+>  agregaré solo la dependencia nueva y correré `pip check` y la prueba de
+>  compatibilidad kombu↔redis antes de cada push. Y pre-calcularé los KPIs
+>  del Dashboard con `annotate` desde el principio."
 
 ## Velocidad del Sprint 5
 
@@ -975,6 +1286,7 @@ git commit -m "Sprint 5 W18: Beat + reporte_diario + crontab + 171 tests OK [pre
 
 **Velocidad Sprint 5:** 18 puntos
 **Velocidad acumulada (S0–S5):** 123 puntos
+**Tests al cierre:** 171 (OK, 2 skipped por GTK en Windows)
 ```
 
 ---
@@ -984,6 +1296,7 @@ git commit -m "Sprint 5 W18: Beat + reporte_diario + crontab + 171 tests OK [pre
 ```markdown
 # Ficha de Sistematización — Espiral 6
 ## ERP Django · Espiral E6: Celery e Integraciones
+## UTEC Celaya · Técnico en Programación (SEP 3061300006-23)
 
 | Campo | Contenido |
 |---|---|
@@ -991,61 +1304,99 @@ git commit -m "Sprint 5 W18: Beat + reporte_diario + crontab + 171 tests OK [pre
 | **Nombre del ciclo** | Celery e Integraciones |
 | **Semanas** | W16 – W18 |
 | **Fecha de inicio** | ___/___/_____ |
-| **Fecha de cierre** | ___/___/_____ |
+| **Fecha de cierre** | 20/11/2026 |
 | **Responsable** | [Nombre del estudiante] |
 | **Asesor** | MC. Román Fernando López González |
 
+---
+
 ## 1. Objetivo del ciclo
+
 Implementar procesamiento asíncrono con Celery y Redis para:
 correos transaccionales de confirmación de pedido, alertas de
-stock bajo y reportes diarios automáticos vía Celery Beat.
+stock bajo y reportes diarios automáticos vía Celery Beat, en un
+entorno sin Docker Desktop (laboratorio en modo EAGER) y con
+producción en el plan gratuito de Render.
+
+---
 
 ## 2. Tareas realizadas
 
 | # | Tarea | Estado | Semana |
 |---|---|---|---|
-| 1 | pip install celery redis flower | ✅ | W16 |
-| 2 | core/celery.py + core/__init__.py | ✅ | W16 |
-| 3 | CELERY_* en settings.py | ✅ | W16 |
-| 4 | docker-compose: worker + flower | ✅ | W16 |
-| 5 | ventas/tasks.py (2 tareas placeholder) | ✅ | W16 |
-| 6 | pip install django-anymail | ✅ | W17 |
-| 7 | Template confirmacion_pedido.html + .txt | ✅ | W17 |
-| 8 | Template alerta_stock.html + .txt | ✅ | W17 |
-| 9 | enviar_confirmacion_pedido: correo real + idempotencia | ✅ | W17 |
-| 10 | verificar_stock_bajo: alerta al admin | ✅ | W17 |
-| 11 | Template reporte_ventas.html + .txt | ✅ | W18 |
-| 12 | reporte_ventas_diario con annotate + Sum(F()) | ✅ | W18 |
-| 13 | CELERY_BEAT_SCHEDULE (crontab + timedelta) | ✅ | W18 |
-| 14 | docker-compose: celery_beat | ✅ | W18 |
+| 1 | Celery 5.3.6 + redis 5.0.1 + flower 2.0.1 | ✅ | W16 |
+| 2 | `core/celery.py` + `core/__init__.py` | ✅ | W16 |
+| 3 | `CELERY_*` en settings: Redis si hay `REDIS_URL`, EAGER si no | ✅ | W16 |
+| 4 | Worker embebido en `docker-entrypoint.sh` (`CELERY_EMBEDDED_WORKER=1`) | ✅ | W16 |
+| 5 | Webhook `payment_intent.succeeded` como único disparador del correo | ✅ | W16 |
+| 6 | `django-anymail[sendgrid]==10.3`; SendGrid en prod si hay API Key | ✅ | W17 |
+| 7 | `Pedido.correo_enviado` + migración 0004 (idempotencia) | ✅ | W17 |
+| 8 | Templates `confirmacion_pedido` y `alerta_stock` (.html + .txt) con `items_snapshot` | ✅ | W17 |
+| 9 | `enviar_confirmacion_pedido`: correo real + idempotencia + retry | ✅ | W17 |
+| 10 | `verificar_stock_bajo`: alerta al admin | ✅ | W17 |
+| 11 | Templates `reporte_ventas` (.html + .txt) con KPIs y tabla | ✅ | W18 |
+| 12 | `reporte_ventas_diario` con `annotate` + `Sum(F('cantidad') * F('precio_unitario'))` | ✅ | W18 |
+| 13 | `CELERY_BEAT_SCHEDULE`: crontab(hour=8, minute=0) + timedelta(hours=1) | ✅ | W18 |
+| 14 | Beat embebido en el worker de Render (`--beat`) | ✅ | W18 |
+| 15 | Fix `kombu==5.3.7` (VersionMismatch con redis-py 5.0.1) | ✅ | W18 |
+| 16 | Acción admin para reenviar confirmación de pagados sin correo | ✅ | W18 |
+
+---
 
 ## 3. Evidencias
-- Worker activo: `celery -A core worker` → tasks registradas
-- Beat activo: `celery -A core beat` → schedule configurado
-- Flower: http://localhost:5555 → workers online
-- Tests: Ran 171 tests → OK
-- Correo confirmación: enviado tras pago (idempotente)
-- Alerta stock: enviada cuando stock < umbral
-- Reporte: programado crontab(hour=8, minute=0)
+
+- Pruebas: `python manage.py test tests` → **Ran 171 tests — OK (skipped=2)**
+  (los 2 omitidos generan PDF con WeasyPrint y requieren GTK: corren en Docker/Render)
+- Pruebas de la espiral: `test_w16_celery` (9), `test_w17_correo` (12),
+  `test_w18_beat` (10), `test_w18_dependencias` (2)
+- Correo de confirmación: consola local `Resultado 1: ok` / `Resultado 2: skip`
+- Logs de Render a verificar tras desplegar:
+  - [ ] `Celery Beat embebido ACTIVADO (reporte diario HH:MM hora MX)`
+  - [ ] `celery@... ready.` y `beat: Starting...` sin `VersionMismatch`
+  - [ ] `Task ventas.enviar_confirmacion_pedido[...] succeeded ... 'estado': 'ok'`
+  - [ ] `Scheduler: Sending due task reporte-ventas-diario-8am`
+- [ ] Captura del correo recibido: `evidencias/espiral_06/correo_confirmacion.png`
+- [ ] Captura del reporte diario: `evidencias/espiral_06/reporte_diario.png`
+
+---
 
 ## 4. Criterios de aceptación
 
 | Criterio | Estado |
 |---|---|
-| Worker procesa enviar_confirmacion_pedido | ✅ |
-| correo_enviado=True previene duplicados | ✅ |
+| Worker procesa `enviar_confirmacion_pedido` | ✅ (EAGER local · Render tras fix kombu) |
+| `correo_enviado=True` previene duplicados | ✅ |
 | Alerta de stock enviada al admin | ✅ |
-| reporte_ventas_diario en BEAT_SCHEDULE | ✅ |
-| verificar_stock_bajo en BEAT_SCHEDULE | ✅ |
+| `reporte_ventas_diario` en `CELERY_BEAT_SCHEDULE` | ✅ |
+| `verificar_stock_bajo` en `CELERY_BEAT_SCHEDULE` | ✅ |
 | 171 tests OK | ✅ |
 
+---
+
 ## 5. Problemas encontrados
-(completar durante la sesión)
+
+| Problema | Causa | Solución aplicada |
+|---|---|---|
+| Sin Docker Desktop en el laboratorio | Política del equipo | Modo EAGER sin `REDIS_URL`; Redis/worker solo en Render |
+| Render Free sin Background Workers | Plan gratuito | Worker y Beat embebidos en el contenedor web |
+| Webhook: `VersionMismatch: redis-py 6.1.0 or later` | `pip freeze` subió `kombu` a 5.7.0 | `kombu==5.3.7` + prueba de compatibilidad |
+| Reporte de las 8:30 nunca llegó | Worker sin `--beat` y servicio dormido | `--beat` en el entrypoint + ping externo |
+| Top de productos vacío | El checkout crea `Pedido`, no `Venta` | Top suma también `items_snapshot` |
+| SendGrid 403 | `DEFAULT_FROM_EMAIL` ≠ remitente verificado | Usar el From del Single Sender |
+| `requirements.txt` en UTF-16 | `pip freeze >` en PowerShell | Editar a mano / usar cmd |
+
+---
 
 ## 6. Lecciones aprendidas
-1.
-2.
+
+1. El modo EAGER es ideal para desarrollar, pero oculta los errores de
+   conexión con el broker: hay que probar el transporte real o al menos
+   la compatibilidad de versiones.
+2. La idempotencia (`correo_enviado`) se diseña desde el modelo, no se
+   agrega después.
 3.
+
+---
 
 ## 7. Tiempo total invertido
 
@@ -1067,18 +1418,49 @@ stock bajo y reportes diarios automáticos vía Celery Beat.
 ```markdown
 ## Sprint 5 — Estado final W18
 
-| HU | Estado | Pts |
-|---|---|---|
-| HU-E6-01 a HU-E6-06 | ✅ Completadas | 18/18 |
+| HU | Historia | Estado | Pts |
+|---|---|---|---|
+| HU-E6-01 | Infraestructura Celery+Redis funcional | ✅ Completada | 3 |
+| HU-E6-02 | Tareas sin bloquear HTTP | ✅ Completada | 2 |
+| HU-E6-03 | Correo de confirmación post-pago | ✅ Completada | 5 |
+| HU-E6-04 | Correo de alerta de stock bajo | ✅ Completada | 3 |
+| HU-E6-05 | Reporte diario de ventas a las 8 AM | ✅ Completada | 3 |
+| HU-E6-06 | Monitorear tareas con Flower | ✅ Completada | 2 |
+| **Total** | | | **18/18** |
+
+## Sprint Backlog — actualización W18
+
+| Tarea | Estado |
+|---|---|
+| reporte_ventas_diario: annotate + Sum(F('cantidad') * F('precio_unitario')) | ✅ W18 |
+| Top 5 incluye compras en línea (Pedido.items_snapshot) | ✅ W18 |
+| Templates reporte_ventas.html + .txt (KPIs + tabla) | ✅ W18 |
+| CELERY_BEAT_SCHEDULE: reporte crontab(hour=8, minute=0) + stock timedelta(hours=1) | ✅ W18 |
+| Hora configurable REPORTE_DIARIO_HORA (Render: 10:00 para pruebas) | ✅ W18 |
+| Beat embebido en el worker de Render (--beat, CELERY_EMBEDDED_BEAT=1) | ✅ W18 |
+| Fix kombu 5.7.0 → 5.3.7 (VersionMismatch con redis 5.0.1) | ✅ W18 |
+| Acción admin "Enviar correo de confirmación" (pagados sin correo) | ✅ W18 |
+| Suite completa en verde | ✅ W18 |
 
 ## Hito M6 — ALCANZADO ✅
-- Worker: celery -A core worker → tareas procesadas
-- Beat: celery -A core beat → schedule activo
-- Correo: enviar_confirmacion_pedido → enviado post-pago
-- Alerta: verificar_stock_bajo → correo al admin
-- Reporte: crontab(8,0) → 8:00 AM diario
-- Tests: Ran 171 tests → OK
-- Fecha: ___/___/_____
+- Worker: embebido en el contenedor web de Render (`--pool=solo`)
+- Beat: embebido en el worker (`--beat`), una sola instancia
+- Correo: enviar_confirmacion_pedido → solo desde el webhook, idempotente
+- Alerta: verificar_stock_bajo → cada hora, correo al admin
+- Reporte: crontab(hour=8, minute=0) → 8:00 AM hora de México
+  (configurable con REPORTE_DIARIO_HORA)
+- Tests: Ran 171 tests → OK (2 skipped: PDF requiere GTK, corre en Docker/Render)
+- Fecha: 20/Noviembre/2026
+
+### Observaciones de verificación (2026-11-20)
+- Laboratorio sin Docker Desktop: Redis, worker, Beat y Flower solo
+  existen en Render; localmente todo corre en modo EAGER.
+- En Render el correo no llegaba por `kombu==5.7.0` + `redis==5.0.1`
+  (VersionMismatch). Corregido; confirmar en los Logs tras el despliegue.
+- Render Free se duerme sin tráfico: Beat solo dispara si el servicio
+  está despierto (ping externo cada 10 min).
+- Flower (HU-E6-06) está instalado (`flower==2.0.1`), pero no se expone
+  en Render Free: en producción se monitorea con los Logs del worker.
 ```
 
 ### Commit final de la Espiral 6
@@ -1088,23 +1470,26 @@ git add .
 git status
 
 :: Verificar que incluye:
-::   ventas/tasks.py (con reporte_ventas_diario)
+::   ventas/tasks.py (reporte_ventas_diario con dos fuentes)
+::   ventas/admin.py (acción "Enviar correo de confirmación")
 ::   templates/emails/reporte_ventas.html + .txt
-::   core/settings.py (CELERY_BEAT_SCHEDULE)
-::   docker-compose.yml (celery_beat service)
-::   tests/test_w18_beat.py
-::   sprint5_retrospective.md
-::   sprint5_planning.md (actualizado)
-::   fichas/espiral_06_async.md
+::   core/settings.py (CELERY_BEAT_SCHEDULE + REPORTE_DIARIO_HORA)
+::   docker-entrypoint.sh (worker --beat)
+::   docker-compose.yml (celery_beat opcional, solo Docker Desktop)
+::   render.yaml (CELERY_EMBEDDED_BEAT, REPORTE_DIARIO_HORA)
+::   requirements.txt (kombu==5.3.7, UTF-8)
+::   tests/test_w18_beat.py + tests/test_w18_dependencias.py
+::   clientes/urls.py, ventas/views.py y pruebas W02/W08/W12 corregidas
+::   fichas/espiral_01_infra.md + fichas/espiral_06_async.md
+::   sprint5_retrospective.md + sprint5_planning.md
 
-git commit -m "Sprint 5 CIERRE [M6]: Beat + reporte_diario + 171 tests OK + Ficha E6"
+git commit -m "Sprint 5 CIERRE [M6]: Beat embebido + reporte_diario + 171 tests OK + Fichas E1/E6"
 git push origin main
 ```
 
 ### Ejecutar `finalizar_sesion.bat`
 
 ```cmd
-:: Detener todos los procesos (Ctrl+C × 3 si hay 3 terminales)
 E:\finalizar_sesion.bat
 ```
 
@@ -1117,93 +1502,75 @@ E:\finalizar_sesion.bat
 ```
 TAREA REPORTE DIARIO
 [ ] ventas/tasks.py: reporte_ventas_diario(@shared_task)
-[ ] Usa annotate + Sum(F('cantidad') * F('precio_unitario'))
-[ ] Filtra pedidos de HOY con fecha_pedido__date=timezone.localdate()
-[ ] Top 5 productos por ingreso del día
-[ ] Envía correo a ADMINS[0] si está configurado
-[ ] Devuelve dict con total_pedidos, total_facturado, top_productos
+[ ] annotate + Sum(F('cantidad') * F('precio_unitario')) para ventas internas
+[ ] Top 5 suma también Pedido.items_snapshot (compras en línea)
+[ ] Pedidos pagados de HOY: fecha_pedido__date=timezone.localdate()
+[ ] Envía correo a ADMINS[0]; url_admin con SITE_URL (sin URL fija)
+[ ] Devuelve dict con fecha, total_pedidos, total_facturado, top_productos
 
 TEMPLATES
-[ ] templates/emails/reporte_ventas.html con KPI grid y tabla top productos
-[ ] templates/emails/reporte_ventas.txt (versión texto plano)
-[ ] Ambos usan contexto con: fecha, config, total_pedidos,
-    total_facturado, top_productos, url_admin
+[ ] reporte_ventas.html con KPI grid y tabla top productos
+[ ] reporte_ventas.txt (versión texto plano)
+[ ] Pie con {{ hora_programada }} (no "8:00 AM" fijo)
 
 CELERY BEAT
-[ ] CELERY_BEAT_SCHEDULE en settings.py
+[ ] Imports crontab y timedelta al inicio de settings.py
 [ ] verificar_stock_bajo: timedelta(hours=1) con args=(5,)
-[ ] reporte_ventas_diario: crontab(hour=8, minute=0)
+[ ] reporte_ventas_diario: crontab desde REPORTE_DIARIO_HORA (default 08:00)
 [ ] CELERY_BEAT_TIMEZONE = TIME_ZONE
-[ ] from datetime import timedelta al inicio de settings.py
-[ ] from celery.schedules import crontab en settings.py
 
-DOCKER COMPOSE
-[ ] Servicio celery_beat agregado con correct command
-[ ] depends_on redis + db
-[ ] Solo UNA instancia (nunca escalar beat)
-
-PROCESOS (verificación manual)
-[ ] celery -A core beat -l info → muestra el schedule configurado
-[ ] celery -A core worker -l info → ventas.reporte_ventas_diario registrada
-[ ] reporte_ventas_diario.apply().get() → dict con totales
-[ ] Flower → ambas tareas visibles en historial
+RENDER
+[ ] docker-entrypoint.sh: worker con --beat --schedule=/tmp/celerybeat-schedule
+[ ] CELERY_EMBEDDED_BEAT=1 (no la hora)
+[ ] REPORTE_DIARIO_HORA=HH:MM
+[ ] requirements.txt: kombu==5.3.7 con redis==5.0.1 (pip check OK)
+[ ] Logs: beat: Starting... · Connected to redis · celery@... ready
+[ ] Correo de confirmación recibido tras una compra
+[ ] Correo de reporte recibido a la hora programada
+[ ] Ping externo cada 10 min (Render Free se duerme)
 
 TESTS
-[ ] test tests.test_w18_beat → 8/8 OK
-[ ] test tests → 171/171 OK acumulados
-[ ] test_beat_schedule_tiene_* → nombres exactos en BEAT_SCHEDULE
-[ ] test_reporte_usa_crontab → isinstance(..., crontab)
-[ ] test_reporte_envia_correo → mail.outbox tiene 1 mensaje
-[ ] test_reporte_sin_ventas → outbox tiene 1 mensaje (total=0)
+[ ] test tests.test_w18_beat → 10/10 OK
+[ ] test tests.test_w18_dependencias → 2/2 OK
+[ ] test tests → 171 OK (skipped=2)
 
 SCRUM / SCHMELKES
 [ ] sprint5_planning.md: 18/18 puntos entregados
-[ ] sprint5_retrospective.md: 3 secciones + Kaizen + velocidad
-[ ] fichas/espiral_06_async.md: 14 tareas completadas, criterios OK
-[ ] Commit de cierre con etiqueta [M6]
-[ ] git push → GitHub actualizado
+[ ] sprint5_retrospective.md: Keep · Improve · Kaizen · velocidad
+[ ] fichas/espiral_06_async.md completa
+[ ] fichas/espiral_01_infra.md (requerida por test_w03_deploy)
+[ ] Commit de cierre con etiqueta [M6] + git push
 [ ] finalizar_sesion.bat → archivos en USB
 ```
 
 ---
 
-## DIAGRAMA: Arquitectura de Celery al cerrar Espiral 6
+## DIAGRAMA: Arquitectura de Celery al cerrar Espiral 6 (Render Free)
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ Django + Gunicorn (proceso web)                                 │
-│                                                                 │
-│  POST /catalogo/webhook/                                        │
-│      → pedido.estado = 'pagado'                                 │
-│      → enviar_confirmacion_pedido.delay(pk) ──────────────┐    │
-│                                                           │    │
-│  GET /catalogo/pago-exitoso/                              │    │
-│      → _guardar_carrito({})                               │    │
-│      → enviar_confirmacion_pedido.delay(pk) ──────────────┤    │
-└───────────────────────────────────────────────────────────┼────┘
-                                                            │
-                ┌───────────────────────────────────────────▼────┐
-                │ Redis (Broker — cola erp_django)                │
-                │  Mensajes pendientes:                           │
-                │  [enviar_confirmacion, reporte_diario, ...]     │
-                └─────────┬───────────────────┬──────────────────┘
-                           │                   │
-          ┌────────────────▼──┐     ┌──────────▼────────────────┐
-          │ Celery Worker     │     │ Celery Beat               │
-          │ (lee la cola)     │     │ (programa tareas)         │
-          │                   │     │                           │
-          │ Ejecuta:          │     │ Cada hora:                │
-          │ · enviar_conf...  │     │   verificar_stock_bajo.   │
-          │ · verificar_stock │     │   delay(5)                │
-          │ · reporte_diario  │     │                           │
-          └──────────────────┘     │ 8:00 AM cada día:         │
-                   │                │   reporte_ventas_diario.  │
-                   ▼                │   delay()                 │
-          Correo enviado ✉️         └───────────────────────────┘
-          Stock alertado ⚠️
-          Reporte generado 📊
+┌─────────────────────── Contenedor web en Render (1 instancia) ───────────────────────┐
+│                                                                                      │
+│  Gunicorn (Django)                          Celery worker --pool=solo --beat         │
+│  ─────────────────                          ─────────────────────────────────        │
+│  POST /catalogo/webhook/                    Worker: ejecuta las tareas de la cola    │
+│    → pedido.estado = 'pagado'               Beat:   cada hora → verificar_stock_bajo │
+│    → descontar stock (W15)                          REPORTE_DIARIO_HORA →            │
+│    → try: enviar_confirmacion_pedido                   reporte_ventas_diario         │
+│           .delay(pk)  ──────────┐                          │                         │
+│                                 │                          │                         │
+│  GET /catalogo/pago-exitoso/    │                          │                         │
+│    → vacía carrito (NO encola)  │                          │                         │
+└─────────────────────────────────┼──────────────────────────┼─────────────────────────┘
+                                  ▼                          ▼
+                     ┌─────────────────────────────────────────────┐
+                     │ Render Key Value (Redis) — cola erp_django   │
+                     └─────────────────────────────────────────────┘
+                                  │
+                                  ▼
+                 anymail → SendGrid → ✉️ confirmación · ⚠️ alerta · 📊 reporte
 
-Flower (:5555): monitorea workers + historial de tareas
+Laboratorio (sin Docker): REDIS_URL vacía → EAGER → .delay() se ejecuta en el mismo
+proceso y el correo se imprime en la terminal (backend de consola).
 ```
 
 ---
@@ -1212,7 +1579,7 @@ Flower (:5555): monitorea workers + historial de tareas
 
 **¿Qué cierra W18 / Espiral 6?**
 La automatización completa del ERP: correos transaccionales, alertas
-y reportes ejecutándose de forma autónoma. 171 tests verifican
+y reportes ejecutándose de forma autónoma en Render. 171 tests verifican
 cada pieza de la integración. Hito M6 declarado.
 
 **¿Qué abre W19 / Espiral 7 / Sprint 6?**
@@ -1226,7 +1593,7 @@ en tiempo real usando Chart.js y consultas optimizadas con `annotate`.
 |---|---|
 | `reporte_ventas_diario` con `annotate` | El dashboard usa las mismas queries SQL pero en tiempo real |
 | `Pedido.objects.filter(estado='pagado')` | El KPI de ventas del día usa este mismo filtro |
-| Redis ya corriendo | W19 usará `cache.set/get` con Redis para cachear el dashboard |
+| Redis (Render Key Value) ya conectado | W19 usará `cache.set/get` con Redis para cachear el dashboard (el plan Free tiene 25 MB) |
 | 171 tests pasando | W19 agrega tests de las vistas del dashboard |
 
 **Tarea de investigación para W19:**
@@ -1248,6 +1615,30 @@ en tiempo real usando Chart.js y consultas optimizadas con `annotate`.
 
 ---
 
+## NOTAS — Observaciones de la verificación (2026-11-20)
+
+Funcionamiento confirmado en Render: `beat: Starting...`, worker conectado
+a Redis, correo de confirmación de una compra recibido vía SendGrid y
+reporte diario recibido exactamente a la hora de `REPORTE_DIARIO_HORA`.
+
+| # | Sección | Problema en la versión anterior | Corrección |
+|---|---|---|---|
+| 1 | Parte 4 | Beat como servicio de `docker-compose` con `django_celery_beat` (no instalado) | Beat embebido: `worker --beat` en `docker-entrypoint.sh` |
+| 1b | 4.6 | `celery_beat` de `docker-compose.yml` con credenciales y scheduler erróneos | Servicio corregido (opcional, solo Docker Desktop) |
+| 2 | Parte 5 | 4 terminales con Redis local y Flower en `:5555` | Laboratorio en EAGER; verificación con los Logs de Render |
+| 3 | 2.2 | Top 5 solo de `DetalleVenta`: el checkout no crea `Venta` | Suma también `Pedido.items_snapshot` |
+| 4 | 2.2 | URL fija `erp-django-utec.onrender.com` | `_url_absoluta()` con `SITE_URL` |
+| 5 | 3.1 | `crontab` importado a mitad de `settings.py` | Imports al inicio |
+| 6 | 3.1 / 1.x | Hora fija 8:00 en código y plantillas | `REPORTE_DIARIO_HORA` + `{{ hora_programada }}` |
+| 7 | — | `kombu==5.7.0` con `redis==5.0.1` → `VersionMismatch` en Render | `kombu==5.3.7` + `test_w18_dependencias.py` |
+| 8 | — | Variables mal capturadas (`CELERY_EMBEDDED_BEAT=10:00`, Reply-To como remitente) | Tabla 4.4 |
+| 9 | — | Render Free se duerme y Beat no dispara | Ping externo cada 10 min (4.5) |
+| 10 | Diagrama | `pago_exitoso` encolaba el correo | Desde W16 solo el webhook encola |
+| 11 | Arranque / 6.x | 163 → 171 con 8 pruebas | 159 → 171 (10 + 2 nuevas); 11 fallas heredadas corregidas (6.4) |
+| 12 | Parte 8 / Cierre | Retro y ficha describían procesos separados y Flower | Contenido real del proyecto |
+
+---
+
 ## Referencia rápida de comandos W18
 
 ```cmd
@@ -1255,31 +1646,27 @@ en tiempo real usando Chart.js y consultas optimizadas con `annotate`.
 E:\iniciar_sesion.bat
 E:\finalizar_sesion.bat
 
-:: DJANGO (terminal 1)
+:: DJANGO
 python manage.py check
 python manage.py runserver
 
-:: CELERY WORKER (terminal 2)
-celery -A core worker -l info -Q erp_django
+:: CELERY → NO en el laboratorio (sin Docker/Redis: modo EAGER).
+::   En Render: docker-entrypoint.sh arranca "celery -A core worker ... --beat"
+::   con CELERY_EMBEDDED_WORKER=1 y CELERY_EMBEDDED_BEAT=1.
 
-:: CELERY BEAT (terminal 3) — proceso separado
-celery -A core beat -l info
-
-:: ALTERNATIVA DESARROLLO (worker + beat juntos, terminal 2)
-celery -A core worker -B -l info -Q erp_django
-
-:: FLOWER (terminal 4)
-celery -A core flower --port=5555
-
-:: SHELL — ejecutar tareas inmediatamente para probar
+:: SHELL — ejecutar tareas inmediatamente (EAGER)
 python manage.py shell
 >>> from ventas.tasks import reporte_ventas_diario, verificar_stock_bajo
->>> reporte_ventas_diario.apply().get()
->>> verificar_stock_bajo.apply(args=(100,)).get()
+>>> reporte_ventas_diario.delay().get()
+>>> verificar_stock_bajo.delay(100).get()
+
+:: DEPENDENCIAS
+pip install "kombu==5.3.7"
+pip check
 
 :: TESTS
-python manage.py test tests.test_w18_beat --verbosity=2
-python manage.py test tests --verbosity=0   (171 tests)
+python manage.py test tests.test_w18_beat tests.test_w18_dependencias --verbosity=2
+python manage.py test tests --verbosity=0   (171 tests, skipped=2)
 
 :: GIT
 git add .
