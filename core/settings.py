@@ -249,3 +249,30 @@ ACCOUNT_SESSION_REMEMBER       = True           # recordar sesión
 # LOGIN_URL           = '/accounts/login/'
 # LOGIN_REDIRECT_URL  = '/productos/'
 LOGOUT_REDIRECT_URL = '/'
+
+# ── CELERY — Cola de tareas asíncronas (W16) ──────────────────────────────
+# REDIS_URL definida (Render → Key Value): las tareas se encolan en Redis y
+#     las procesa el worker.
+# REDIS_URL vacía (laboratorio sin Docker / tests): modo EAGER → .delay()
+#     ejecuta la tarea en el mismo proceso, sin broker ni worker.
+REDIS_URL = env('REDIS_URL', default='')
+
+if REDIS_URL:
+    CELERY_BROKER_URL        = REDIS_URL
+    CELERY_RESULT_BACKEND    = REDIS_URL
+    CELERY_TASK_ALWAYS_EAGER = False
+else:
+    CELERY_BROKER_URL        = 'memory://'
+    CELERY_RESULT_BACKEND    = 'cache+memory://'
+    CELERY_TASK_ALWAYS_EAGER = True
+
+CELERY_RESULT_EXPIRES    = 3600          # resultados caducan en 1 hora
+CELERY_ACCEPT_CONTENT    = ['json']
+CELERY_TASK_SERIALIZER   = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE          = TIME_ZONE
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_TASK_SOFT_TIME_LIMIT = 300        # 5 min
+CELERY_TASK_TIME_LIMIT      = 360        # 6 min (límite duro)
+CELERY_TASK_DEFAULT_QUEUE   = 'erp_django'
+CELERY_TASK_EAGER_PROPAGATES = True      # en EAGER, las excepciones se propagan
