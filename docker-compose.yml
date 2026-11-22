@@ -20,6 +20,18 @@ services:
       timeout: 5s
       retries: 10
 
+  # ── Redis — broker de Celery (W16) ──────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"          # solo accesible desde este equipo
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   web:
     build: .
     entrypoint: ["sh", "/app/docker-entrypoint.sh"]
@@ -33,7 +45,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
+      REDIS_URL:                  redis://redis:6379/0
+      CELERY_EMBEDDED_WORKER:     "0"   # aquí el worker es el servicio celery_worker
       DJANGO_SETTINGS_MODULE:     core.settings_prod
       MODO_LOCAL:                 "True"
       SECRET_KEY:                 dev-clave-docker-no-usar-en-produccion
@@ -48,6 +64,46 @@ services:
       # vacías y el checkout muestra "no disponible" (sin romper el resto).
       STRIPE_SECRET_KEY:          ${STRIPE_SECRET_KEY:-}
       STRIPE_PUBLISHABLE_KEY:     ${STRIPE_PUBLISHABLE_KEY:-}
+
+  # ── Worker de Celery (W16) ───────────────────────────────────────────
+  celery_worker:
+    build: .
+    entrypoint: ["sh", "/app/docker-entrypoint.sh"]   # exec "$@" ejecuta el command
+    command: celery -A core worker -l info -Q erp_django
+    restart: unless-stopped
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings_prod
+      MODO_LOCAL:             "True"
+      SECRET_KEY:             dev-clave-docker-no-usar-en-produccion
+      DATABASE_URL:           postgres://erp_user:erp_pass_local@db:5432/erp_db
+      ALLOWED_HOSTS:          localhost,127.0.0.1
+      REDIS_URL:              redis://redis:6379/0
+
+  # ── Flower — monitor de Celery (W16) → http://localhost:5555 ─────────
+  flower:
+    build: .
+    entrypoint: ["sh", "/app/docker-entrypoint.sh"]
+    command: celery -A core flower --port=5555
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5555:5555"          # solo accesible desde este equipo
+    depends_on:
+      - redis
+      - celery_worker
+    environment:
+      DJANGO_SETTINGS_MODULE: core.settings_prod
+      MODO_LOCAL:             "True"
+      SECRET_KEY:             dev-clave-docker-no-usar-en-produccion
+      DATABASE_URL:           postgres://erp_user:erp_pass_local@db:5432/erp_db
+      ALLOWED_HOSTS:          localhost,127.0.0.1
+      REDIS_URL:              redis://redis:6379/0
 
 volumes:
   postgres_data:
