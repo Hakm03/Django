@@ -3,7 +3,14 @@
 > Documento de traspaso para continuar en otra sesión de Claude Code (casa).
 > Guía fuente: `docs/guides/Guia_Lab_W16.md` · Reglas: `CLAUDE.md`
 
-## 1. Estado al cerrar la sesión (escuela)
+> **Actualización 2026-11-22:** este plan quedó superado por la guía W16 revisada.
+> Sin Docker en el laboratorio: modo EAGER sin `REDIS_URL`; Redis y worker solo en
+> Render (worker embebido, `CELERY_EMBEDDED_WORKER=1`). La tarea se encola solo
+> desde el webhook. W16 ya está implementada en la rama `w16` (ver `git log`).
+> SendGrid se descartó (exige verificar teléfono): el proveedor de correo de W17
+> está por definir (alternativas: Brevo / Mailjet vía django-anymail).
+
+## 1. Estado al cerrar la sesión (escuela) — histórico
 
 - Rama `w16` **creada** desde `main` (commit `1edd08a`, que ya incluye W15). Está en el repo local.
 - **Sigo en `main`**: el checkout a `w16` está pendiente de confirmación (Protocolo de Parada). Nada instalado, nada de código escrito.

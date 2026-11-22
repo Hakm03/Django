@@ -5,7 +5,8 @@ Descubiertas por app.autodiscover_tasks() (core/celery.py).
 
 Estado:
     W16: placeholders (solo registran en el log).
-    W17: correo real con SendGrid (+ idempotencia con correo_enviado).
+    W17: correo real vía django-anymail (proveedor por definir) +
+         idempotencia con correo_enviado.
     W18: tareas programadas con Celery Beat.
 """
 import logging
