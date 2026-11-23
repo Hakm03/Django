@@ -1,17 +1,19 @@
 # ventas/tasks.py
-"""Tareas asíncronas de la app ventas — W16.
+"""Tareas asíncronas de la app ventas — W16/W17.
 
 Descubiertas por app.autodiscover_tasks() (core/celery.py).
 
 Estado:
-    W16: placeholders (solo registran en el log).
-    W17: correo real vía django-anymail (proveedor por definir) +
-         idempotencia con correo_enviado.
+    W16: infraestructura Celery (tareas como placeholders).
+    W17: correo real vía django-anymail + SendGrid, con idempotencia
+         (Pedido.correo_enviado) y alerta de stock al administrador.
     W18: tareas programadas con Celery Beat.
 """
 import logging
 
 from celery import shared_task
+from django.conf import settings
+from django.core.mail import send_mail
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -24,9 +26,11 @@ logger = logging.getLogger(__name__)
     name='ventas.enviar_confirmacion_pedido',
 )
 def enviar_confirmacion_pedido(self, pedido_id: int) -> dict:
-    """Confirmación de pedido al cliente (W16: solo log).
+    """Envía el recibo del pedido al cliente (una sola vez por pedido).
 
     Recibe el ID (no el objeto) porque los argumentos deben ser JSON.
+    Idempotente: si Pedido.correo_enviado ya es True no vuelve a enviar.
+    Si el proveedor falla, se reintenta (hasta max_retries).
     """
     from ventas.models import Pedido   # import local: evita circularidad
 
@@ -37,18 +41,58 @@ def enviar_confirmacion_pedido(self, pedido_id: int) -> dict:
                      pedido_id)
         return {'estado': 'error', 'pedido_id': pedido_id}
 
-    logger.info(
-        '[Tarea enviar_confirmacion] Procesando pedido %s para %s. '
-        'Total: $%s. Timestamp: %s',
-        pedido.numero_pedido, pedido.cliente.correo,
-        pedido.total_pagado, timezone.now().isoformat(),
+    if pedido.correo_enviado:
+        logger.info('[Tarea enviar_confirmacion] Pedido %s ya tenía recibo '
+                    'enviado; se omite.', pedido.numero_pedido)
+        return {'estado': 'omitido', 'pedido_id': pedido_id}
+
+    destino = pedido.cliente.correo
+    if not destino:
+        logger.warning('[Tarea enviar_confirmacion] Pedido %s: el cliente '
+                       'no tiene correo.', pedido.numero_pedido)
+        return {'estado': 'sin_correo', 'pedido_id': pedido_id}
+
+    lineas = [
+        f"  - {i.get('nombre', '?')} x{i.get('cantidad', 1)}"
+        f" — ${i.get('precio', '0.00')} c/u"
+        for i in (pedido.items_snapshot or [])
+    ]
+    detalle = ("Detalle:\n" + "\n".join(lineas) + "\n\n") if lineas else ""
+    cuerpo = (
+        f"Hola {pedido.cliente.nombre},\n\n"
+        f"¡Gracias por tu compra! Recibimos el pago de tu pedido "
+        f"{pedido.numero_pedido}.\n\n"
+        f"{detalle}"
+        f"Total pagado: ${pedido.total_pagado}\n\n"
+        "Este es un recibo automático. Conserva este correo como "
+        "comprobante.\n"
     )
+
+    try:
+        send_mail(
+            subject=f'Recibo de tu pedido {pedido.numero_pedido}',
+            message=cuerpo,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[destino],
+            fail_silently=False,
+        )
+    except Exception as exc:
+        logger.exception('[Tarea enviar_confirmacion] Falló el envío del '
+                         'pedido %s.', pedido.numero_pedido)
+        raise self.retry(exc=exc)
+
+    # Marca atómica: si otra tarea ya lo marcó, no pasa nada.
+    Pedido.objects.filter(pk=pedido.pk, correo_enviado=False).update(
+        correo_enviado=True)
+    logger.info('[Tarea enviar_confirmacion] Recibo del pedido %s enviado. '
+                'Timestamp: %s', pedido.numero_pedido,
+                timezone.now().isoformat())
 
     return {
         'estado':    'ok',
         'pedido_id': pedido_id,
         'numero':    pedido.numero_pedido,
-        'cliente':   pedido.cliente.correo,
+        'cliente':   destino,
     }
 
 
@@ -58,7 +102,10 @@ def enviar_confirmacion_pedido(self, pedido_id: int) -> dict:
     name='ventas.verificar_stock_bajo',
 )
 def verificar_stock_bajo(self, umbral: int = 5) -> dict:
-    """Detecta productos activos con stock < umbral (W16: solo log)."""
+    """Detecta productos activos con stock < umbral y avisa al admin.
+
+    El correo se envía solo si hay productos bajos y ADMIN_EMAIL existe.
+    """
     from productos.models import Producto   # import local
 
     productos_bajos = list(
@@ -78,8 +125,31 @@ def verificar_stock_bajo(self, umbral: int = 5) -> dict:
         logger.info('[Tarea verificar_stock] Todos con stock >= %s. OK.',
                     umbral)
 
+    correo_enviado = False
+    if productos_bajos and settings.ADMIN_EMAIL:
+        detalle = "\n".join(
+            f"  - {p['nombre']}: {p['stock']} unidad(es)"
+            for p in productos_bajos
+        )
+        try:
+            send_mail(
+                subject=(f'Alerta de stock bajo '
+                         f'({len(productos_bajos)} producto(s))'),
+                message=(f'Productos activos con stock menor a {umbral}:'
+                         f'\n\n{detalle}\n'),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[settings.ADMIN_EMAIL],
+                fail_silently=False,
+            )
+            correo_enviado = True
+        except Exception as exc:
+            logger.exception('[Tarea verificar_stock] Falló el envío de '
+                             'la alerta.')
+            raise self.retry(exc=exc)
+
     return {
         'umbral':          umbral,
         'productos_bajos': productos_bajos,
         'total':           len(productos_bajos),
+        'correo_enviado':  correo_enviado,
     }

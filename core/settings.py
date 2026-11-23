@@ -276,3 +276,16 @@ CELERY_TASK_SOFT_TIME_LIMIT = 300        # 5 min
 CELERY_TASK_TIME_LIMIT      = 360        # 6 min (límite duro)
 CELERY_TASK_DEFAULT_QUEUE   = 'erp_django'
 CELERY_TASK_EAGER_PROPAGATES = True      # en EAGER, las excepciones se propagan
+# ─── W17: Correo (django-anymail + SendGrid) ──────────────────────────────
+# Con SENDGRID_API_KEY → envío real por la API HTTPS de SendGrid (Render Free
+# bloquea SMTP). Sin la clave → los correos se imprimen en la consola.
+# En los tests Django usa siempre el backend locmem (no envía nada).
+SENDGRID_API_KEY    = env('SENDGRID_API_KEY', default='')
+DEFAULT_FROM_EMAIL  = env('DEFAULT_FROM_EMAIL', default='ERP Django <noreply@localhost>')
+SERVER_EMAIL        = DEFAULT_FROM_EMAIL
+ADMIN_EMAIL         = env('ADMIN_EMAIL', default='')   # destino de alertas de stock
+if SENDGRID_API_KEY:
+    EMAIL_BACKEND = 'anymail.backends.sendgrid.EmailBackend'
+    ANYMAIL = {'SENDGRID_API_KEY': SENDGRID_API_KEY}
+else:
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
