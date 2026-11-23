@@ -237,3 +237,100 @@ class ComandoProbarCorreoTest(TestCase):
         with self.assertRaises(CommandError):
             call_command('probar_correo')
         self.assertEqual(len(mail.outbox), 0)
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True)
+class ReciboHtmlTest(TestCase):
+    """El recibo incluye versión HTML además del texto plano."""
+
+    def setUp(self):
+        ConfiguracionERP.get_instance()
+
+    def test_recibo_incluye_alternativa_html(self):
+        pedido = _crear_pedido()
+        enviar_confirmacion_pedido.delay(pedido.pk).get()
+        msg = mail.outbox[0]
+        self.assertEqual(len(msg.alternatives), 1)
+        html, mimetype = msg.alternatives[0]
+        self.assertEqual(mimetype, 'text/html')
+        self.assertIn('Taza azul', html)
+        self.assertIn('100.00', html)        # subtotal 2 x 50.00
+        self.assertIn('116.00', html)        # total
+
+    def test_html_escapa_nombres_de_producto(self):
+        pedido = _crear_pedido(snapshot=[
+            {'nombre': '<script>x</script>', 'cantidad': 1, 'precio': '5.00'}])
+        enviar_confirmacion_pedido.delay(pedido.pk).get()
+        html = mail.outbox[0].alternatives[0][0]
+        self.assertNotIn('<script>x</script>', html)
+
+    def test_item_con_precio_invalido_no_rompe_el_envio(self):
+        pedido = _crear_pedido(snapshot=[
+            {'nombre': 'Raro', 'cantidad': 'dos', 'precio': 'abc'}])
+        data = enviar_confirmacion_pedido.delay(pedido.pk).get()
+        self.assertEqual(data['estado'], 'ok')
+
+
+@override_settings(CELERY_TASK_ALWAYS_EAGER=True)
+class AdminPedidoTest(TestCase):
+    """Columna, filtro y acción de reenviar recibo en el admin."""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        ConfiguracionERP.get_instance()
+        self.admin_user = User.objects.create_superuser(
+            'root', 'root@test.com', 'pass12345')
+        self.client.force_login(self.admin_user)
+        self.url = reverse('admin:ventas_pedido_changelist')
+
+    def _accion(self, pedidos):
+        return self.client.post(self.url, {
+            'action': 'reenviar_recibo',
+            '_selected_action': [p.pk for p in pedidos],
+        }, follow=True)
+
+    def test_lista_muestra_columna_y_filtro(self):
+        _crear_pedido()
+        r = self.client.get(self.url)
+        self.assertEqual(r.status_code, 200)
+        cl = r.context['cl']
+        self.assertIn('correo_enviado', cl.list_display)
+        self.assertIn('correo_enviado', cl.model_admin.list_filter)
+
+    def test_reenviar_recibo_de_pedido_pagado(self):
+        pedido = _crear_pedido()
+        Pedido.objects.filter(pk=pedido.pk).update(correo_enviado=True)
+        self._accion([pedido])
+        self.assertEqual(len(mail.outbox), 1)
+        pedido.refresh_from_db()
+        self.assertTrue(pedido.correo_enviado)
+
+    def test_no_reenvia_pedidos_no_pagados(self):
+        pedido = _crear_pedido(estado='pendiente')
+        r = self._accion([pedido])
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertContains(r, 'omitido')
+
+    def test_requiere_login_de_admin(self):
+        self.client.logout()
+        r = self.client.get(self.url)
+        self.assertEqual(r.status_code, 302)
+
+
+class AvisoRevisarSpamTest(TestCase):
+    """La página de pago exitoso avisa que se revise la carpeta de spam."""
+
+    @patch('catalogo.views._pago_verificado', return_value=True)
+    def test_pago_exitoso_menciona_spam(self, _verificado):
+        from django.contrib.auth.models import User
+        ConfiguracionERP.get_instance()
+        pedido = _crear_pedido(estado='pendiente')
+        user = User.objects.create_user('comprador', password='pass')
+        self.client.force_login(user)
+        sesion = self.client.session
+        sesion['pedidos_checkout'] = [pedido.pk]
+        sesion.save()
+        r = self.client.get(reverse('catalogo:pago_exitoso', args=[pedido.pk]))
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'recibo por correo')
+        self.assertContains(r, 'Spam')

@@ -1,8 +1,12 @@
 # ventas/admin.py
 """Configuración del panel admin para la app ventas."""
-from django.contrib import admin
+import logging
+
+from django.contrib import admin, messages
 
 from .models import DetalleVenta, Pedido, Venta
+
+logger = logging.getLogger(__name__)
 
 
 class DetalleVentaInline(admin.TabularInline):
@@ -49,7 +53,40 @@ class PedidoAdmin(admin.ModelAdmin):
     """Admin de pedidos de e-commerce."""
 
     list_display   = ['numero_pedido', 'cliente', 'estado',
-                      'fecha_pedido', 'total_pagado']
+                      'fecha_pedido', 'total_pagado', 'correo_enviado']
     search_fields  = ['numero_pedido', 'cliente__nombre']
-    list_filter    = ['estado']
+    list_filter    = ['estado', 'correo_enviado']
     readonly_fields = ['fecha_pedido']
+    actions        = ['reenviar_recibo']
+
+    @admin.action(description='Reenviar recibo por correo (solo pedidos pagados)')
+    def reenviar_recibo(self, request, queryset):
+        """Vuelve a encolar el recibo de los pedidos pagados seleccionados."""
+        from .tasks import enviar_confirmacion_pedido   # import local
+
+        pagados = queryset.filter(estado='pagado')
+        omitidos = queryset.count() - pagados.count()
+        encolados = 0
+        for pedido in pagados:
+            pedido.correo_enviado = False
+            pedido.save(update_fields=['correo_enviado'])
+            try:
+                enviar_confirmacion_pedido.delay(pedido.pk)
+                encolados += 1
+            except Exception:
+                logger.exception('Admin: no se pudo encolar el recibo de %s.',
+                                 pedido.numero_pedido)
+                self.message_user(
+                    request,
+                    f'No se pudo encolar el recibo de {pedido.numero_pedido} '
+                    '(¿Redis disponible?).',
+                    level=messages.ERROR)
+        if encolados:
+            self.message_user(
+                request, f'Recibo en cola para {encolados} pedido(s).',
+                level=messages.SUCCESS)
+        if omitidos:
+            self.message_user(
+                request,
+                f'{omitidos} pedido(s) omitido(s): solo se reenvían los '
+                'pagados.', level=messages.WARNING)

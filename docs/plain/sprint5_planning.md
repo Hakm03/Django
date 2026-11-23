@@ -33,7 +33,7 @@ Plan B si SendGrid falla: Brevo (vía anymail).
 - Reporte diario ejecutado a las 8:00 AM (W18)
 - python manage.py test → ≥ 155 tests OK
 
-## Sprint Backlog — actualización W16
+## Sprint Backlog — actualización W16/W17
 
 | Tarea | Estado |
 |---|---|
@@ -48,6 +48,11 @@ Plan B si SendGrid falla: Brevo (vía anymail).
 | tests/test_w16_celery.py (12 tests) · suite completa 259 OK | ✅ W16 |
 | Key Value (Redis) Free en Render + variables en Environment | ⏳ usuario |
 | Worker embebido "ready" en logs de Render | ⏳ usuario |
-| SendGrid: correo de confirmación real + correo_enviado (migración) | ⏳ W17 |
-| Alerta de stock bajo por correo | ⏳ W17 |
+| SendGrid: correo de confirmación real + correo_enviado (migración 0004) | ✅ W17 |
+| Alerta de stock bajo por correo (a ADMIN_EMAIL) | ✅ W17 |
+| Recibo HTML con diseño + texto plano | ✅ W17 |
+| Admin de pedidos: columna/filtro «Recibo enviado» + acción reenviar | ✅ W17 |
+| Aviso «revisa Spam» en la página de pago exitoso | ✅ W17 |
+| Comando `manage.py probar_correo` (validar SendGrid) | ✅ W17 |
+| Variables SENDGRID_API_KEY, DEFAULT_FROM_EMAIL, ADMIN_EMAIL en Render | ✅ usuario |
 | Celery Beat + reporte diario | ⏳ W18 |

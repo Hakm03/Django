@@ -11,12 +11,37 @@ Estado:
 """
 import logging
 
+from decimal import Decimal, InvalidOperation
+
 from celery import shared_task
 from django.conf import settings
 from django.core.mail import send_mail
+from django.template.loader import render_to_string
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
+
+
+def _items_para_correo(snapshot) -> list:
+    """Convierte items_snapshot en filas con subtotal para el recibo HTML.
+
+    Tolera datos incompletos: un item con precio inválido se muestra con
+    subtotal 0.00 en vez de romper el envío del recibo.
+    """
+    filas = []
+    for i in snapshot or []:
+        try:
+            precio = Decimal(str(i.get('precio', '0')))
+            cantidad = int(i.get('cantidad', 1))
+        except (InvalidOperation, ValueError, TypeError):
+            precio, cantidad = Decimal('0'), 1
+        filas.append({
+            'nombre':   i.get('nombre', '?'),
+            'cantidad': cantidad,
+            'precio':   f'{precio:.2f}',
+            'subtotal': f'{precio * cantidad:.2f}',
+        })
+    return filas
 
 
 @shared_task(
@@ -68,12 +93,18 @@ def enviar_confirmacion_pedido(self, pedido_id: int) -> dict:
         "comprobante.\n"
     )
 
+    html = render_to_string('ventas/email/recibo.html', {
+        'pedido': pedido,
+        'items':  _items_para_correo(pedido.items_snapshot),
+    })
+
     try:
         send_mail(
             subject=f'Recibo de tu pedido {pedido.numero_pedido}',
             message=cuerpo,
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[destino],
+            html_message=html,
             fail_silently=False,
         )
     except Exception as exc:
