@@ -31,3 +31,4 @@ celery==5.3.6
 redis==5.0.1
 kombu==5.3.7
 flower==2.0.1
+django-anymail==13.1

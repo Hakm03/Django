@@ -8,9 +8,9 @@ de stock bajo y reporte diario de ventas, sin bloquear las peticiones HTTP.
 
 **Cambio de plan (2026-11-22):** SendGrid se descartó porque exige
 verificar un teléfono y no fue posible completarlo. El proveedor de correo
-será **Mailjet** (plan gratuito, API por HTTPS) vía `django-anymail`.
+será **Brevo** (plan gratuito, API por HTTPS) vía `django-anymail`.
 Render Free bloquea los puertos SMTP, por eso no se usa SMTP (p. ej. Gmail).
-Plan B si Mailjet falla: Brevo.
+Plan B si Brevo falla: otro proveedor por API.
 
 ## HUs seleccionadas
 
@@ -48,6 +48,6 @@ Plan B si Mailjet falla: Brevo.
 | tests/test_w16_celery.py (12 tests) · suite completa 259 OK | ✅ W16 |
 | Key Value (Redis) Free en Render + variables en Environment | ⏳ usuario |
 | Worker embebido "ready" en logs de Render | ⏳ usuario |
-| Mailjet: correo de confirmación real + correo_enviado (migración) | ⏳ W17 |
+| Brevo: correo de confirmación real + correo_enviado (migración) | ⏳ W17 |
 | Alerta de stock bajo por correo | ⏳ W17 |
 | Celery Beat + reporte diario | ⏳ W18 |
