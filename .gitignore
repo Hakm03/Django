@@ -24,3 +24,6 @@ media/
 # Sistema operativo
 Thumbs.db
 .DS_Store
+
+# Codigos/secretos locales (no subir)
+code_twilio.txt
