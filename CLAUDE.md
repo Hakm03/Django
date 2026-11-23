@@ -34,7 +34,7 @@ No instales, elimines ni cambies versiones de paquetes sin autorización explíc
   - Documentos (W12): `openpyxl==3.1.5` (Excel), `weasyprint==60.2` + `pydyf==0.10.0` (PDF).
   - Filtros (W13): `django-filter==25.1` (en `INSTALLED_APPS` se registra como `django_filters`).
   - Pagos (W14–W15): `stripe==16.1.0` (requiere `.to_dict()` en eventos webhook porque devuelve `StripeObject`).
-  - Asíncrono y Correos (W16–W18): `celery==5.3.6`, `redis==5.0.1`, `flower==2.0.1`, `django-anymail==13.1` (proveedor: Brevo vía API; SendGrid y Mailjet descartados: exigen verificación de teléfono/empresa).
+  - Asíncrono y Correos (W16–W18): `celery==5.3.6`, `redis==5.0.1`, `flower==2.0.1`, `django-anymail==13.1` (proveedor: SendGrid vía API; Mailjet y Brevo quedaron como plan B).
 - **Configuraciones y Diseño:**
   - Settings: `core/settings.py` (desarrollo) | `core/settings_prod.py` (producción, activado por `DJANGO_SETTINGS_MODULE=core.settings_prod`).
   - UI/Templates: `templates/base.html` (clases CSS: `btn-erp-primary`, `btn-erp-gold`, `btn-erp-danger`, `erp-page-title`, `erp-card`, `erp-table`).

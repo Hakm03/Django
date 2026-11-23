@@ -6,11 +6,11 @@ Al finalizar el Sprint 5, el ERP ejecutará tareas pesadas de forma
 asíncrona con Celery+Redis: correo de confirmación de pedido, alerta
 de stock bajo y reporte diario de ventas, sin bloquear las peticiones HTTP.
 
-**Cambio de plan (2026-11-22):** SendGrid se descartó porque exige
-verificar un teléfono y no fue posible completarlo. El proveedor de correo
-será **Brevo** (plan gratuito, API por HTTPS) vía `django-anymail`.
+**Nota (2026-11-23):** se evaluaron Mailjet y Brevo cuando SendGrid no dejaba
+verificar un teléfono. Al lograr la verificación se volvió al plan original:
+**SendGrid** (plan gratuito, API por HTTPS) vía `django-anymail`.
 Render Free bloquea los puertos SMTP, por eso no se usa SMTP (p. ej. Gmail).
-Plan B si Brevo falla: otro proveedor por API.
+Plan B si SendGrid falla: Brevo (vía anymail).
 
 ## HUs seleccionadas
 
@@ -48,6 +48,6 @@ Plan B si Brevo falla: otro proveedor por API.
 | tests/test_w16_celery.py (12 tests) · suite completa 259 OK | ✅ W16 |
 | Key Value (Redis) Free en Render + variables en Environment | ⏳ usuario |
 | Worker embebido "ready" en logs de Render | ⏳ usuario |
-| Brevo: correo de confirmación real + correo_enviado (migración) | ⏳ W17 |
+| SendGrid: correo de confirmación real + correo_enviado (migración) | ⏳ W17 |
 | Alerta de stock bajo por correo | ⏳ W17 |
 | Celery Beat + reporte diario | ⏳ W18 |

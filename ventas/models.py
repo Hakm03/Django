@@ -195,6 +195,11 @@ class Pedido(models.Model):
             '"cantidad": 2, "precio": "500.00"}]'
         )
     )
+    correo_enviado = models.BooleanField(
+        default=False,
+        verbose_name='Recibo enviado',
+        help_text='True cuando ya se envió el recibo por correo (evita duplicados).'
+    )
 
     def clean(self) -> None:
         """Valida que la fecha de entrega no sea anterior al pedido.
