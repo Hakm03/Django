@@ -41,6 +41,15 @@ services:
         sync: false
       - key: CELERY_EMBEDDED_WORKER     # 1 = worker de Celery dentro del contenedor web
         value: "1"
+      # W17: correo transaccional con Mailjet (django-anymail). Valores en el panel.
+      - key: MAILJET_API_KEY
+        sync: false
+      - key: MAILJET_SECRET_KEY
+        sync: false
+      - key: DEFAULT_FROM_EMAIL         # ERP Django <remitente-verificado-en-Mailjet>
+        sync: false
+      - key: ADMIN_EMAIL                # recibe alertas de stock y errores
+        sync: false
 
 databases:
   - name: erp-django-db
