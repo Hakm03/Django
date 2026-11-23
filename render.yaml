@@ -27,8 +27,8 @@ services:
         value: "3.11.9"
       # Stripe (W14+) — sync:false = Render NO guarda el valor en este archivo;
       # te lo pedirá en el panel la primera vez (o lo agregas en Environment).
-      # Nota: este servicio se configuró a mano en Render y NO usa render.yaml,
-      # pero se documenta aquí por si algún día se usa Infrastructure as Code.
+      # Nota: este servicio SÍ se despliega con este archivo (Blueprint): cualquier
+      # cambio aquí afecta a Render en el siguiente sync. Revisar antes de hacer push.
       - key: STRIPE_SECRET_KEY
         sync: false
       - key: STRIPE_PUBLISHABLE_KEY
@@ -41,10 +41,10 @@ services:
         sync: false
       - key: CELERY_EMBEDDED_WORKER     # 1 = worker de Celery dentro del contenedor web
         value: "1"
-      # W17: correo transaccional con Brevo (django-anymail). Valores en el panel.
-      - key: BREVO_API_KEY
+      # W17: correo transaccional con SendGrid (django-anymail). Valores en el panel.
+      - key: SENDGRID_API_KEY
         sync: false
-      - key: DEFAULT_FROM_EMAIL         # ERP Django <remitente-verificado-en-Brevo>
+      - key: DEFAULT_FROM_EMAIL         # Nombre <remitente-verificado-en-SendGrid>
         sync: false
       - key: ADMIN_EMAIL                # recibe alertas de stock y errores
         sync: false
