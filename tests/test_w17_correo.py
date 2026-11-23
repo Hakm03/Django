@@ -210,3 +210,30 @@ class RecibosDesdeWebhookTest(TestCase):
         mock_event.return_value = evento
         self._post()
         self.assertEqual(len(mail.outbox), 0)
+
+
+@override_settings(DEFAULT_FROM_EMAIL='ERP Django <tienda@test.com>',
+                   ADMIN_EMAIL='admin@test.com')
+class ComandoProbarCorreoTest(TestCase):
+    """python manage.py probar_correo"""
+
+    def test_envia_a_admin_email_por_defecto(self):
+        from django.core.management import call_command
+        from io import StringIO
+        call_command('probar_correo', stdout=StringIO())
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['admin@test.com'])
+
+    def test_acepta_otro_destinatario(self):
+        from django.core.management import call_command
+        from io import StringIO
+        call_command('probar_correo', 'otro@test.com', stdout=StringIO())
+        self.assertEqual(mail.outbox[0].to, ['otro@test.com'])
+
+    @override_settings(DEFAULT_FROM_EMAIL='ERP Django <noreply@localhost>')
+    def test_rechaza_remitente_de_relleno(self):
+        from django.core.management import call_command
+        from django.core.management.base import CommandError
+        with self.assertRaises(CommandError):
+            call_command('probar_correo')
+        self.assertEqual(len(mail.outbox), 0)
