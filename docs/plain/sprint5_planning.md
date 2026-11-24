@@ -55,4 +55,4 @@ Plan B si SendGrid falla: Brevo (vía anymail).
 | Aviso «revisa Spam» en la página de pago exitoso | ✅ W17 |
 | Comando `manage.py probar_correo` (validar SendGrid) | ✅ W17 |
 | Variables SENDGRID_API_KEY, DEFAULT_FROM_EMAIL, ADMIN_EMAIL en Render | ✅ usuario |
-| Celery Beat + reporte diario | ⏳ W18 |
+| Celery Beat + reporte diario (solo si hubo ventas ayer) + alerta de stock diaria | ✅ W18 (2026-11-24) |

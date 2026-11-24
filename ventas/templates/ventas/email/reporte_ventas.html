@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><title>Reporte de ventas {{ fecha }}</title></head>
+<body style="margin:0;padding:0;background:#F5F7FA;font-family:Arial,Helvetica,sans-serif;color:#1A1A2E;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F5F7FA;padding:24px 0;">
+    <tr><td align="center">
+      <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#FFFFFF;border:1px solid #C8D8EC;border-radius:8px;overflow:hidden;">
+        <tr>
+          <td style="background:#0A2342;padding:22px 28px;border-bottom:4px solid #B8860B;">
+            <div style="font-family:Georgia,'Times New Roman',serif;font-size:22px;color:#FFFFFF;">📊 Reporte de ventas</div>
+            <div style="font-size:13px;color:#D4A017;margin-top:4px;">{{ config.nombre_empresa }} · {{ fecha }}</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:28px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="8" style="margin-bottom:20px;">
+              <tr>
+                <td align="center" style="background:#E8F0FB;border-radius:8px;padding:14px;">
+                  <div style="font-size:24px;font-weight:bold;color:#0A2342;">{{ total_pedidos }}</div>
+                  <div style="font-size:11px;color:#5A6A7E;text-transform:uppercase;">Pedidos pagados</div>
+                </td>
+                <td align="center" style="background:#E8F0FB;border-radius:8px;padding:14px;">
+                  <div style="font-size:24px;font-weight:bold;color:#B8860B;">${{ total_facturado }}</div>
+                  <div style="font-size:11px;color:#5A6A7E;text-transform:uppercase;">Total facturado</div>
+                </td>
+              </tr>
+            </table>
+
+            {% if top_productos %}
+            <p style="margin:0 0 8px;font-weight:bold;color:#0A2342;">Top {{ top_productos|length }} productos</p>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:14px;">
+              <tr style="background:#0A2342;color:#FFFFFF;">
+                <th align="left" style="padding:8px 10px;">#</th>
+                <th align="left" style="padding:8px 10px;">Producto</th>
+                <th align="right" style="padding:8px 10px;">Unid.</th>
+                <th align="right" style="padding:8px 10px;">Ingreso</th>
+              </tr>
+              {% for p in top_productos %}
+              <tr>
+                <td style="padding:8px 10px;border-bottom:1px solid #C8D8EC;">{{ forloop.counter }}</td>
+                <td style="padding:8px 10px;border-bottom:1px solid #C8D8EC;">{{ p.nombre }}</td>
+                <td align="right" style="padding:8px 10px;border-bottom:1px solid #C8D8EC;">{{ p.unidades }}</td>
+                <td align="right" style="padding:8px 10px;border-bottom:1px solid #C8D8EC;">${{ p.ingreso }}</td>
+              </tr>
+              {% endfor %}
+            </table>
+            {% else %}
+            <p style="background:#FDF8E8;border:1px solid #B8860B;border-radius:8px;padding:14px;text-align:center;color:#5A6A7E;">
+              Sin ventas registradas ese día.
+            </p>
+            {% endif %}
+
+            {% if url_admin %}
+            <p style="margin:22px 0 0;font-size:13px;">
+              <a href="{{ url_admin }}" style="color:#0A2342;">Abrir el panel de pedidos</a>
+            </p>
+            {% endif %}
+            <p style="margin:22px 0 0;font-size:12px;color:#5A6A7E;border-top:1px solid #C8D8EC;padding-top:14px;">
+              Generado automáticamente por ERP Django. Solo recibes este correo los días con ventas.
+            </p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>

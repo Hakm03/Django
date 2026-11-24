@@ -27,3 +27,6 @@ Thumbs.db
 
 # Codigos/secretos locales (no subir)
 code_twilio.txt
+
+## Archivos de claude (no subir)
+.claude/

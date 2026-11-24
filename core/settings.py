@@ -289,3 +289,45 @@ if SENDGRID_API_KEY:
     ANYMAIL = {'SENDGRID_API_KEY': SENDGRID_API_KEY}
 else:
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+# ─── W18: Celery Beat — tareas programadas ────────────────────────────────
+# Beat es el "reloj": a la hora indicada mete la tarea en la cola y el worker
+# la ejecuta. En Render corre embebido en el worker (docker-entrypoint.sh).
+# Las horas son HH:MM en hora de México y se cambian desde Render → Environment
+# sin tocar código. Un valor con formato inválido vuelve al valor por defecto.
+from celery.schedules import crontab
+
+
+def _hora_hhmm(valor: str, defecto: tuple) -> tuple:
+    """Convierte 'HH:MM' en (hora, minuto); si es inválida usa el defecto."""
+    try:
+        h, m = (int(x) for x in str(valor).strip().split(':'))
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            return h, m
+    except ValueError:
+        pass
+    return defecto
+
+
+REPORTE_DIARIO_HORA = env('REPORTE_DIARIO_HORA', default='08:00')
+ALERTA_STOCK_HORA   = env('ALERTA_STOCK_HORA',   default='08:05')
+_rep_h, _rep_m = _hora_hhmm(REPORTE_DIARIO_HORA, (8, 0))
+_stk_h, _stk_m = _hora_hhmm(ALERTA_STOCK_HORA,   (8, 5))
+
+# URL pública para los enlaces de los correos (Render la inyecta sola).
+SITE_URL = env('SITE_URL', default=env('RENDER_EXTERNAL_URL', default=''))
+
+CELERY_BEAT_SCHEDULE = {
+    # Una vez al día revisa el stock; el correo sale SOLO si hay productos bajos.
+    'alerta-stock-bajo-diaria': {
+        'task':     'ventas.verificar_stock_bajo',
+        'schedule': crontab(hour=_stk_h, minute=_stk_m),
+        'args':     (5,),   # umbral: menos de 5 unidades
+    },
+    # Una vez al día revisa las ventas de AYER; el correo sale SOLO si hubo.
+    'reporte-ventas-diario': {
+        'task':     'ventas.reporte_ventas_diario',
+        'schedule': crontab(hour=_rep_h, minute=_rep_m),
+    },
+}
+CELERY_BEAT_TIMEZONE = TIME_ZONE   # horas en México, no en UTC

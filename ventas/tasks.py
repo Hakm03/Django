@@ -184,3 +184,147 @@ def verificar_stock_bajo(self, umbral: int = 5) -> dict:
         'total':           len(productos_bajos),
         'correo_enviado':  correo_enviado,
     }
+
+
+# ── W18: reporte diario (Celery Beat) ─────────────────────────────────────
+
+def _top_productos_del_dia(dia, pedidos) -> list:
+    """Top 5 productos por ingreso del día, sumando las dos fuentes de venta.
+
+    Ventas internas (DetalleVenta, agregadas en SQL) y compras de la tienda
+    en línea (Pedido.items_snapshot): el checkout crea Pedido, nunca Venta,
+    así que sin la segunda fuente las compras web no aparecerían.
+    """
+    from django.db.models import DecimalField, ExpressionWrapper, F, Sum
+
+    from ventas.models import DetalleVenta
+
+    acumulado = {}   # nombre → {'unidades': int, 'ingreso': Decimal}
+
+    internas = (
+        DetalleVenta.objects
+        .filter(venta__fecha__date=dia)
+        .values(nombre=F('producto__nombre'))
+        .annotate(
+            unidades=Sum('cantidad'),
+            ingreso=Sum(ExpressionWrapper(
+                F('cantidad') * F('precio_unitario'),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            )),
+        )
+    )
+    for fila in internas:
+        dato = acumulado.setdefault(
+            fila['nombre'], {'unidades': 0, 'ingreso': Decimal('0.00')})
+        dato['unidades'] += fila['unidades'] or 0
+        dato['ingreso'] += fila['ingreso'] or Decimal('0.00')
+
+    for pedido in pedidos.only('items_snapshot'):
+        for item in _items_para_correo(pedido.items_snapshot):
+            dato = acumulado.setdefault(
+                item['nombre'], {'unidades': 0, 'ingreso': Decimal('0.00')})
+            dato['unidades'] += item['cantidad']
+            dato['ingreso'] += Decimal(item['subtotal'])
+
+    top = sorted(acumulado.items(), key=lambda kv: kv[1]['ingreso'],
+                 reverse=True)[:5]
+    return [{'nombre': n, 'unidades': d['unidades'],
+             'ingreso': f"{d['ingreso']:.2f}"} for n, d in top]
+
+
+@shared_task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=120,
+    name='ventas.reporte_ventas_diario',
+)
+def reporte_ventas_diario(self, forzar: bool = False) -> dict:
+    """Revisa las ventas de AYER y avisa al administrador si hubo alguna.
+
+    Beat la ejecuta todos los días a settings.REPORTE_DIARIO_HORA (hora de
+    México). El correo solo se envía si hubo al menos un pedido pagado
+    ayer: así un fin de semana sin actividad no genera correos (cuida el
+    límite gratuito de SendGrid y evita que Gmail marque como spam).
+
+    Args:
+        forzar: True envía el correo aunque no haya ventas (para demos).
+
+    Returns:
+        dict con fecha, total_pedidos, total_facturado, top_productos y
+        correo_enviado (todo serializable a JSON).
+    """
+    from datetime import timedelta
+
+    from django.db.models import Sum
+    from django.urls import reverse
+
+    from configuracion.models import ConfiguracionERP
+    from ventas.models import Pedido
+
+    dia = timezone.localdate() - timedelta(days=1)
+    pedidos = Pedido.objects.filter(fecha_pedido__date=dia, estado='pagado')
+    total_pedidos = pedidos.count()
+    total_facturado = (pedidos.aggregate(t=Sum('total_pagado'))['t']
+                       or Decimal('0.00'))
+    top_productos = _top_productos_del_dia(dia, pedidos) if total_pedidos else []
+
+    resultado = {
+        'fecha':           str(dia),
+        'total_pedidos':   total_pedidos,
+        'total_facturado': f'{total_facturado:.2f}',
+        'top_productos':   top_productos,
+        'correo_enviado':  False,
+    }
+
+    if not total_pedidos and not forzar:
+        logger.info('[Tarea reporte_diario] %s: sin ventas; no se envía '
+                    'correo.', dia)
+        return resultado
+    if not settings.ADMIN_EMAIL:
+        logger.warning('[Tarea reporte_diario] ADMIN_EMAIL vacío; no se '
+                       'envía el reporte de %s.', dia)
+        return resultado
+
+    config = ConfiguracionERP.get_instance()
+    fecha_txt = dia.strftime('%d/%m/%Y')
+    url_admin = (f"{settings.SITE_URL.rstrip('/')}"
+                 f"{reverse('admin:ventas_pedido_changelist')}"
+                 if settings.SITE_URL else '')
+    contexto = {
+        'fecha': fecha_txt, 'config': config, 'url_admin': url_admin,
+        'total_pedidos': total_pedidos,
+        'total_facturado': f'{total_facturado:.2f}',
+        'top_productos': top_productos,
+    }
+    lineas = [
+        f"  {n}. {p['nombre']}: {p['unidades']} unidad(es), ${p['ingreso']}"
+        for n, p in enumerate(top_productos, start=1)
+    ]
+    texto = (
+        f"Reporte de ventas del {fecha_txt} — {config.nombre_empresa}\n\n"
+        f"Pedidos pagados: {total_pedidos}\n"
+        f"Total facturado: ${total_facturado:.2f}\n\n"
+        + ("Top productos:\n" + "\n".join(lineas) + "\n\n" if lineas else "")
+        + (f"Panel de administración: {url_admin}\n" if url_admin else "")
+    )
+
+    try:
+        send_mail(
+            subject=f'Reporte de ventas del {fecha_txt} — '
+                    f'{config.nombre_empresa}',
+            message=texto,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[settings.ADMIN_EMAIL],
+            html_message=render_to_string('ventas/email/reporte_ventas.html',
+                                          contexto),
+            fail_silently=False,
+        )
+    except Exception as exc:
+        logger.exception('[Tarea reporte_diario] Falló el envío del '
+                         'reporte de %s.', dia)
+        raise self.retry(exc=exc)
+
+    resultado['correo_enviado'] = True
+    logger.info('[Tarea reporte_diario] Reporte de %s enviado (%s pedidos).',
+                dia, total_pedidos)
+    return resultado

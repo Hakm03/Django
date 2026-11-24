@@ -29,10 +29,19 @@ fi
 
 # W16: worker de Celery embebido (Render Free no ofrece Background Workers).
 # Se activa con CELERY_EMBEDDED_WORKER=1 y requiere REDIS_URL.
+# W18: Beat (tareas programadas) va dentro del mismo proceso con --beat.
+# Solo debe existir UN Beat: el servicio web debe tener 1 instancia.
+# Se desactiva con CELERY_EMBEDDED_BEAT=0. El archivo del schedule va a /tmp
+# porque el disco de Render es efimero.
 if [ "${CELERY_EMBEDDED_WORKER:-0}" = "1" ] && [ -n "${REDIS_URL:-}" ]; then
+    BEAT_OPTS=""
+    if [ "${CELERY_EMBEDDED_BEAT:-1}" = "1" ]; then
+        BEAT_OPTS="--beat --schedule=/tmp/celerybeat-schedule"
+        echo "==> [W18] Celery Beat embebido ACTIVADO (reporte ${REPORTE_DIARIO_HORA:-08:00}, alerta de stock ${ALERTA_STOCK_HORA:-08:05}, hora de Mexico)."
+    fi
     echo "==> [W16] Iniciando worker de Celery embebido (cola erp_django)..."
-    celery -A core worker --loglevel=info --queues=erp_django --pool=solo \
-        --without-gossip --without-mingle --without-heartbeat &
+    # shellcheck disable=SC2086
+    celery -A core worker --loglevel=info --queues=erp_django --pool=solo         --without-gossip --without-mingle --without-heartbeat $BEAT_OPTS &
 else
     echo "==> [W16] Worker de Celery embebido DESACTIVADO."
 fi
