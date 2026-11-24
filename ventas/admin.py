@@ -57,7 +57,7 @@ class PedidoAdmin(admin.ModelAdmin):
     search_fields  = ['numero_pedido', 'cliente__nombre']
     list_filter    = ['estado', 'correo_enviado']
     readonly_fields = ['fecha_pedido']
-    actions        = ['reenviar_recibo']
+    actions        = ['reenviar_recibo', 'enviar_reporte_ahora']
 
     @admin.action(description='Reenviar recibo por correo (solo pedidos pagados)')
     def reenviar_recibo(self, request, queryset):
@@ -90,3 +90,35 @@ class PedidoAdmin(admin.ModelAdmin):
                 request,
                 f'{omitidos} pedido(s) omitido(s): solo se reenvían los '
                 'pagados.', level=messages.WARNING)
+
+    @admin.action(description='Enviar reporte de ventas de ayer AHORA '
+                              '(selecciona cualquier pedido)')
+    def enviar_reporte_ahora(self, request, queryset):
+        """Dispara el reporte diario al instante, aunque ayer no haya ventas.
+
+        Útil para demostrar el reporte sin esperar a Celery Beat. Siempre
+        se envía a ADMIN_EMAIL, nunca a otra dirección. La selección de
+        pedidos solo sirve para activar la acción (Django la exige).
+        """
+        from django.conf import settings
+
+        from .tasks import reporte_ventas_diario   # import local
+
+        if not request.user.has_perm('ventas.change_pedido'):
+            self.message_user(request, 'No tienes permiso para esto.',
+                              level=messages.ERROR)
+            return
+        if not settings.ADMIN_EMAIL:
+            self.message_user(request, 'ADMIN_EMAIL no está configurado.',
+                              level=messages.ERROR)
+            return
+        try:
+            reporte_ventas_diario.delay(forzar=True)
+        except Exception:
+            logger.exception('Admin: no se pudo encolar el reporte.')
+            self.message_user(request, 'No se pudo encolar el reporte '
+                              '(¿Redis disponible?).', level=messages.ERROR)
+            return
+        self.message_user(
+            request, 'Reporte en cola: llegará a ADMIN_EMAIL en unos '
+            'segundos (revisa también Spam).', level=messages.SUCCESS)

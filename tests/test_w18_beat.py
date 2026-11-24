@@ -213,3 +213,85 @@ class AlertaStockProgramadaTest(TestCase):
         self.assertTrue(res['correo_enviado'])
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn('Casi agotado', mail.outbox[0].body)
+
+
+# ── Extras W18: alerta por proveedor, HTML y acción del admin ─────────────
+
+@override_settings(ADMIN_EMAIL=ADMIN)
+class AlertaPorProveedorTest(TestCase):
+
+    def setUp(self):
+        from proveedores.models import Proveedor
+        mail.outbox = []
+        cat = Categoria.objects.create(nombre='C')
+        v = Proveedor.objects.create(nombre='Vinos del Valle',
+                                     correo='valle@prov.com')
+        Producto.objects.create(nombre='Tinto', precio=Decimal('9'), stock=2,
+                                categoria=cat, proveedor=v)
+        Producto.objects.create(nombre='Rosado', precio=Decimal('9'), stock=1,
+                                categoria=cat, proveedor=v)
+        Producto.objects.create(nombre='Huerfano', precio=Decimal('9'),
+                                stock=0, categoria=cat)
+
+    def test_texto_agrupa_por_proveedor_y_deja_sin_proveedor_al_final(self):
+        verificar_stock_bajo.apply(args=[5]).get()
+        cuerpo = mail.outbox[0].body
+        self.assertIn('Vinos del Valle <valle@prov.com>', cuerpo)
+        self.assertLess(cuerpo.index('Vinos del Valle'),
+                        cuerpo.index('Sin proveedor asignado'))
+        self.assertIn('Tinto: 2', cuerpo)
+        self.assertIn('Huerfano: 0', cuerpo)
+
+    def test_correo_va_solo_al_admin_nunca_al_proveedor(self):
+        verificar_stock_bajo.apply(args=[5]).get()
+        self.assertEqual(mail.outbox[0].to, [ADMIN])
+        self.assertNotIn('valle@prov.com', mail.outbox[0].to)
+
+    def test_tiene_version_html(self):
+        verificar_stock_bajo.apply(args=[5]).get()
+        html, tipo = mail.outbox[0].alternatives[0]
+        self.assertEqual(tipo, 'text/html')
+        self.assertIn('Vinos del Valle', html)
+        self.assertIn('Sin proveedor asignado', html)
+
+    def test_resultado_incluye_proveedor_por_producto(self):
+        res = verificar_stock_bajo.apply(args=[5]).get()
+        por_nombre = {p['nombre']: p for p in res['productos_bajos']}
+        self.assertEqual(por_nombre['Tinto']['proveedor_nombre'], 'Vinos del Valle')
+        self.assertIsNone(por_nombre['Huerfano']['proveedor_nombre'])
+
+
+@override_settings(ADMIN_EMAIL=ADMIN)
+class AccionEnviarReporteTest(TestCase):
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        mail.outbox = []
+        ConfiguracionERP.get_instance()
+        self.root = get_user_model().objects.create_superuser(
+            'root', 'root@test.com', 'x')
+        self.client.force_login(self.root)
+        self.pedido = _pedido('PED-ACC', '10.00', estado='pendiente')
+
+    def _post(self):
+        return self.client.post('/admin/ventas/pedido/', {
+            'action': 'enviar_reporte_ahora',
+            '_selected_action': [self.pedido.pk]})
+
+    def test_envia_el_reporte_aunque_no_haya_ventas(self):
+        self.assertEqual(self._post().status_code, 302)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [ADMIN])
+
+    @override_settings(ADMIN_EMAIL='')
+    def test_sin_admin_email_no_envia(self):
+        self._post()
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_usuario_sin_permiso_no_envia(self):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user('emp', 'e@t.com', 'x',
+                                                 is_staff=True)
+        self.client.force_login(u)
+        self._post()
+        self.assertEqual(len(mail.outbox), 0)

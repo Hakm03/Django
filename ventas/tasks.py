@@ -127,6 +127,21 @@ def enviar_confirmacion_pedido(self, pedido_id: int) -> dict:
     }
 
 
+def _agrupar_por_proveedor(productos: list) -> list:
+    """Agrupa productos con stock bajo por proveedor (sin proveedor al final)."""
+    grupos = {}
+    for p in productos:
+        clave = (p.get('proveedor_nombre') or '', p.get('proveedor_correo') or '')
+        grupos.setdefault(clave, []).append(
+            {'nombre': p['nombre'], 'stock': p['stock']})
+    ordenados = sorted(grupos.items(), key=lambda kv: (kv[0][0] == '', kv[0][0]))
+    return [
+        {'proveedor': nombre or 'Sin proveedor asignado',
+         'correo': correo, 'productos': items}
+        for (nombre, correo), items in ordenados
+    ]
+
+
 @shared_task(
     bind=True,
     max_retries=1,
@@ -137,12 +152,16 @@ def verificar_stock_bajo(self, umbral: int = 5) -> dict:
 
     El correo se envía solo si hay productos bajos y ADMIN_EMAIL existe.
     """
+    from django.db.models import F
+
     from productos.models import Producto   # import local
 
     productos_bajos = list(
         Producto.objects
         .filter(activo=True, stock__lt=umbral)
-        .values('pk', 'nombre', 'stock')
+        .values('pk', 'nombre', 'stock',
+                proveedor_nombre=F('proveedor__nombre'),
+                proveedor_correo=F('proveedor__correo'))
         .order_by('stock')
     )
 
@@ -158,18 +177,27 @@ def verificar_stock_bajo(self, umbral: int = 5) -> dict:
 
     correo_enviado = False
     if productos_bajos and settings.ADMIN_EMAIL:
-        detalle = "\n".join(
-            f"  - {p['nombre']}: {p['stock']} unidad(es)"
-            for p in productos_bajos
-        )
+        grupos = _agrupar_por_proveedor(productos_bajos)
+        bloques = []
+        for g in grupos:
+            cab = g['proveedor'] + (f" <{g['correo']}>" if g['correo'] else '')
+            bloques.append(cab + ':\n' + '\n'.join(
+                f"  - {i['nombre']}: {i['stock']} unidad(es)"
+                for i in g['productos']))
+        texto = (f'Productos activos con stock menor a {umbral}, '
+                 f'agrupados por proveedor:\n\n'
+                 + '\n\n'.join(bloques) + '\n')
+        html = render_to_string('ventas/email/alerta_stock.html', {
+            'grupos': grupos, 'umbral': umbral,
+            'total': len(productos_bajos)})
         try:
             send_mail(
                 subject=(f'Alerta de stock bajo '
                          f'({len(productos_bajos)} producto(s))'),
-                message=(f'Productos activos con stock menor a {umbral}:'
-                         f'\n\n{detalle}\n'),
+                message=texto,
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[settings.ADMIN_EMAIL],
+                html_message=html,
                 fail_silently=False,
             )
             correo_enviado = True
