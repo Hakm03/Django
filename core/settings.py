@@ -309,9 +309,9 @@ def _hora_hhmm(valor: str, defecto: tuple) -> tuple:
     return defecto
 
 
-REPORTE_DIARIO_HORA = env('REPORTE_DIARIO_HORA', default='08:00')
+REPORTE_DIARIO_HORA = env('REPORTE_DIARIO_HORA', default='23:00')
 ALERTA_STOCK_HORA   = env('ALERTA_STOCK_HORA',   default='08:05')
-_rep_h, _rep_m = _hora_hhmm(REPORTE_DIARIO_HORA, (8, 0))
+_rep_h, _rep_m = _hora_hhmm(REPORTE_DIARIO_HORA, (23, 0))
 _stk_h, _stk_m = _hora_hhmm(ALERTA_STOCK_HORA,   (8, 5))
 
 # URL pública para los enlaces de los correos (Render la inyecta sola).
@@ -324,7 +324,7 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': crontab(hour=_stk_h, minute=_stk_m),
         'args':     (5,),   # umbral: menos de 5 unidades
     },
-    # Una vez al día revisa las ventas de AYER; el correo sale SOLO si hubo.
+    # Corte de las ventas de HOY; el correo sale SOLO si hubo ventas.
     'reporte-ventas-diario': {
         'task':     'ventas.reporte_ventas_diario',
         'schedule': crontab(hour=_rep_h, minute=_rep_m),

@@ -23,6 +23,7 @@ from ventas.models import DetalleVenta, Pedido, Venta
 from ventas.tasks import reporte_ventas_diario, verificar_stock_bajo
 
 ADMIN = 'admin@test.com'
+HOY = timezone.now
 AYER = lambda: timezone.now() - timedelta(days=1)   # noqa: E731
 
 
@@ -35,7 +36,7 @@ def _pedido(num, total, items=None, estado='pagado', cuando=None):
     p = Pedido.objects.create(
         numero_pedido=num, cliente=_cliente_unico(), estado=estado,
         total_pagado=Decimal(total), items_snapshot=items or [])
-    Pedido.objects.filter(pk=p.pk).update(fecha_pedido=cuando or AYER())
+    Pedido.objects.filter(pk=p.pk).update(fecha_pedido=cuando or HOY())
     return p
 
 
@@ -91,7 +92,7 @@ class ReporteDiarioTest(TestCase):
         mail.outbox = []
         ConfiguracionERP.get_instance()
 
-    def test_con_ventas_de_ayer_envia_un_correo_al_admin(self):
+    def test_con_ventas_de_hoy_envia_un_correo_al_admin(self):
         _pedido('PED-1', '116.00', [
             {'nombre': 'Vino Tinto', 'cantidad': 2, 'precio': '58.00'}])
         res = reporte_ventas_diario.apply().get()
@@ -99,8 +100,7 @@ class ReporteDiarioTest(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         msg = mail.outbox[0]
         self.assertEqual(msg.to, [ADMIN])
-        self.assertIn((timezone.localdate() - timedelta(days=1))
-                      .strftime('%d/%m/%Y'), msg.subject)
+        self.assertIn(timezone.localdate().strftime('%d/%m/%Y'), msg.subject)
         self.assertIn('Vino Tinto', msg.body)
         self.assertIn('116.00', msg.body)
         self.assertIn('https://erp.example.com/admin/ventas/pedido/', msg.body)
@@ -112,10 +112,45 @@ class ReporteDiarioTest(TestCase):
         self.assertFalse(res['correo_enviado'])
         self.assertEqual(len(mail.outbox), 0)
 
-    def test_pedido_de_hoy_no_cuenta_en_el_reporte_de_ayer(self):
-        _pedido('PED-HOY', '50.00', cuando=timezone.now())
+    def test_pedido_de_ayer_no_cuenta_en_el_corte_de_hoy(self):
+        _pedido('PED-AYER', '50.00', cuando=AYER())
         reporte_ventas_diario.apply().get()
         self.assertEqual(len(mail.outbox), 0)
+
+    def test_cada_corte_refleja_lo_acumulado_hasta_ese_momento(self):
+        _pedido('PED-1', '10.00')
+        primero = reporte_ventas_diario.apply().get()
+        _pedido('PED-2', '15.50')
+        segundo = reporte_ventas_diario.apply().get()
+        self.assertEqual(primero['total_facturado'], '10.00')
+        self.assertEqual(segundo['total_facturado'], '25.50')
+        self.assertEqual(segundo['total_operaciones'], 2)
+        self.assertEqual(len(mail.outbox), 2)
+
+    def test_pedido_enviado_o_entregado_sigue_contando(self):
+        _pedido('PED-EN', '10.00', estado='enviado')
+        _pedido('PED-EG', '20.00', estado='entregado')
+        _pedido('PED-CA', '99.00', estado='cancelado')
+        res = reporte_ventas_diario.apply().get()
+        self.assertEqual(res['total_pedidos'], 2)
+        self.assertEqual(res['total_facturado'], '30.00')
+
+    def test_venta_interna_cuenta_en_totales_y_dispara_el_envio(self):
+        cat = Categoria.objects.create(nombre='C')
+        prod = Producto.objects.create(
+            nombre='Queso', precio=Decimal('30.00'), stock=50, categoria=cat)
+        venta = Venta.objects.create(cliente=_cliente_unico())
+        for cantidad in (1, 2):
+            DetalleVenta.objects.create(
+                venta=venta, producto=prod, cantidad=cantidad,
+                precio_unitario=Decimal('30.00'))
+        Venta.objects.create(cliente=_cliente_unico())   # vacía: no cuenta
+        res = reporte_ventas_diario.apply().get()
+        self.assertEqual(res['total_internas'], 1)
+        self.assertEqual(res['total_operaciones'], 1)
+        self.assertEqual(res['total_facturado'], '90.00')
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn('90.00', mail.outbox[0].alternatives[0][0])
 
     def test_pedido_pendiente_no_cuenta(self):
         _pedido('PED-PEND', '50.00', estado='pendiente')
@@ -147,7 +182,7 @@ class ReporteDiarioTest(TestCase):
         prod = Producto.objects.create(
             nombre='Queso', precio=Decimal('30.00'), stock=50, categoria=cat)
         venta = Venta.objects.create(cliente=_cliente_unico())
-        Venta.objects.filter(pk=venta.pk).update(fecha=AYER())
+        Venta.objects.filter(pk=venta.pk).update(fecha=HOY())
         DetalleVenta.objects.create(venta=venta, producto=prod, cantidad=3,
                                     precio_unitario=Decimal('30.00'))
         _pedido('PED-W', '60.00', [
@@ -295,3 +330,47 @@ class AccionEnviarReporteTest(TestCase):
         self.client.force_login(u)
         self._post()
         self.assertEqual(len(mail.outbox), 0)
+
+
+@override_settings(ADMIN_EMAIL=ADMIN)
+class AccionAlertaStockTest(TestCase):
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        mail.outbox = []
+        self.root = get_user_model().objects.create_superuser(
+            'root', 'root@test.com', 'x')
+        self.client.force_login(self.root)
+        cat = Categoria.objects.create(nombre='C')
+        self.prod = Producto.objects.create(
+            nombre='Lleno', precio=Decimal('1'), stock=50, categoria=cat)
+        self.cat = cat
+
+    def _post(self):
+        return self.client.post('/admin/productos/producto/', {
+            'action': 'enviar_alerta_stock',
+            '_selected_action': [self.prod.pk]}, follow=True)
+
+    def _bajo(self):
+        Producto.objects.create(nombre='Poco', precio=Decimal('1'), stock=1,
+                                categoria=self.cat)
+
+    def test_revisa_todo_el_inventario_y_envia_al_admin(self):
+        self._bajo()   # no está seleccionado: igual debe aparecer
+        self._post()
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [ADMIN])
+        self.assertIn('Poco', mail.outbox[0].body)
+
+    def test_sin_stock_bajo_avisa_y_no_envia(self):
+        resp = self._post()
+        self.assertEqual(len(mail.outbox), 0)
+        avisos = [str(m) for m in resp.context['messages']]
+        self.assertTrue(any('no se envía' in a for a in avisos), avisos)
+
+    @override_settings(ADMIN_EMAIL='')
+    def test_sin_admin_email_no_envia(self):
+        self._bajo()
+        self._post()
+        self.assertEqual(len(mail.outbox), 0)
+

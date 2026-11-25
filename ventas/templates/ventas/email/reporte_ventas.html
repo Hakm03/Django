@@ -8,21 +8,32 @@
         <tr>
           <td style="background:#0A2342;padding:22px 28px;border-bottom:4px solid #B8860B;">
             <div style="font-family:Georgia,'Times New Roman',serif;font-size:22px;color:#FFFFFF;">📊 Reporte de ventas</div>
-            <div style="font-size:13px;color:#D4A017;margin-top:4px;">{{ config.nombre_empresa }} · {{ fecha }}</div>
+            <div style="font-size:13px;color:#D4A017;margin-top:4px;">{{ config.nombre_empresa }} · {{ fecha }} · corte a las {{ hora_corte }}</div>
           </td>
         </tr>
         <tr>
-          <td style="padding:28px;">
+          <td bgcolor="#FFFFFF" style="padding:28px;background:#FFFFFF;color:#1A1A2E;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="8" style="margin-bottom:20px;">
               <tr>
                 <td align="center" style="background:#E8F0FB;border-radius:8px;padding:14px;">
-                  <div style="font-size:24px;font-weight:bold;color:#0A2342;">{{ total_pedidos }}</div>
-                  <div style="font-size:11px;color:#5A6A7E;text-transform:uppercase;">Pedidos pagados</div>
+                  <div style="font-size:24px;font-weight:bold;color:#0A2342;">{{ total_operaciones }}</div>
+                  <div style="font-size:11px;color:#5A6A7E;text-transform:uppercase;">Ventas de hoy</div>
                 </td>
                 <td align="center" style="background:#E8F0FB;border-radius:8px;padding:14px;">
                   <div style="font-size:24px;font-weight:bold;color:#B8860B;">${{ total_facturado }}</div>
                   <div style="font-size:11px;color:#5A6A7E;text-transform:uppercase;">Total facturado</div>
                 </td>
+              </tr>
+            </table>
+
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;margin-bottom:20px;color:#1A1A2E;">
+              <tr>
+                <td style="padding:6px 0;border-bottom:1px solid #C8D8EC;">Tienda en línea ({{ total_pedidos }} pedido(s))</td>
+                <td align="right" style="padding:6px 0;border-bottom:1px solid #C8D8EC;">${{ total_online }}</td>
+              </tr>
+              <tr>
+                <td style="padding:6px 0;border-bottom:1px solid #C8D8EC;">Ventas internas ({{ total_internas }})</td>
+                <td align="right" style="padding:6px 0;border-bottom:1px solid #C8D8EC;">${{ monto_internas }}</td>
               </tr>
             </table>
 
@@ -46,17 +57,17 @@
             </table>
             {% else %}
             <p style="background:#FDF8E8;border:1px solid #B8860B;border-radius:8px;padding:14px;text-align:center;color:#5A6A7E;">
-              Sin ventas registradas ese día.
+              Sin ventas registradas hoy hasta este momento.
             </p>
             {% endif %}
 
             {% if url_admin %}
             <p style="margin:22px 0 0;font-size:13px;">
-              <a href="{{ url_admin }}" style="color:#0A2342;">Abrir el panel de pedidos</a>
+              <a href="{{ url_admin }}" style="display:inline-block;background:#B8860B;color:#FFFFFF;text-decoration:none;font-weight:bold;padding:10px 18px;border-radius:6px;">Abrir el panel de pedidos</a>
             </p>
             {% endif %}
             <p style="margin:22px 0 0;font-size:12px;color:#5A6A7E;border-top:1px solid #C8D8EC;padding-top:14px;">
-              Generado automáticamente por ERP Django. Solo recibes este correo los días con ventas.
+              Generado automáticamente por ERP Django. El envío programado solo llega si hubo ventas en el día.
             </p>
           </td>
         </tr>

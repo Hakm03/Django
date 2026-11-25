@@ -37,7 +37,7 @@ if [ "${CELERY_EMBEDDED_WORKER:-0}" = "1" ] && [ -n "${REDIS_URL:-}" ]; then
     BEAT_OPTS=""
     if [ "${CELERY_EMBEDDED_BEAT:-1}" = "1" ]; then
         BEAT_OPTS="--beat --schedule=/tmp/celerybeat-schedule"
-        echo "==> [W18] Celery Beat embebido ACTIVADO (reporte ${REPORTE_DIARIO_HORA:-08:00}, alerta de stock ${ALERTA_STOCK_HORA:-08:05}, hora de Mexico)."
+        echo "==> [W18] Celery Beat embebido ACTIVADO (reporte ${REPORTE_DIARIO_HORA:-23:00}, alerta de stock ${ALERTA_STOCK_HORA:-08:05}, hora de Mexico)."
     fi
     echo "==> [W16] Iniciando worker de Celery embebido (cola erp_django)..."
     # shellcheck disable=SC2086

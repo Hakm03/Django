@@ -91,10 +91,10 @@ class PedidoAdmin(admin.ModelAdmin):
                 f'{omitidos} pedido(s) omitido(s): solo se reenvían los '
                 'pagados.', level=messages.WARNING)
 
-    @admin.action(description='Enviar reporte de ventas de ayer AHORA '
+    @admin.action(description='Enviar reporte de ventas de HOY ahora '
                               '(selecciona cualquier pedido)')
     def enviar_reporte_ahora(self, request, queryset):
-        """Dispara el reporte diario al instante, aunque ayer no haya ventas.
+        """Envía al instante el corte de hoy, aunque aún no haya ventas.
 
         Útil para demostrar el reporte sin esperar a Celery Beat. Siempre
         se envía a ADMIN_EMAIL, nunca a otra dirección. La selección de

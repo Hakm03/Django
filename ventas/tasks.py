@@ -21,6 +21,9 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
+# Estados de Pedido que significan dinero cobrado.
+ESTADOS_COBRADOS = ('pagado', 'enviado', 'entregado')
+
 
 def _items_para_correo(snapshot) -> list:
     """Convierte items_snapshot en filas con subtotal para el recibo HTML.
@@ -267,46 +270,69 @@ def _top_productos_del_dia(dia, pedidos) -> list:
     name='ventas.reporte_ventas_diario',
 )
 def reporte_ventas_diario(self, forzar: bool = False) -> dict:
-    """Revisa las ventas de AYER y avisa al administrador si hubo alguna.
+    """Corte de las ventas de HOY (desde las 00:00 hasta este momento).
 
-    Beat la ejecuta todos los días a settings.REPORTE_DIARIO_HORA (hora de
-    México). El correo solo se envía si hubo al menos un pedido pagado
-    ayer: así un fin de semana sin actividad no genera correos (cuida el
-    límite gratuito de SendGrid y evita que Gmail marque como spam).
+    Lo usan Celery Beat (cada día a settings.REPORTE_DIARIO_HORA, hora de
+    México) y la acción del admin. Suma las dos fuentes de venta: pedidos
+    cobrados de la tienda en línea y ventas internas con al menos un
+    producto. El correo programado solo se envía si hoy hubo ventas.
 
     Args:
-        forzar: True envía el correo aunque no haya ventas (para demos).
+        forzar: True envía el correo aunque no haya ventas (acción admin).
 
     Returns:
-        dict con fecha, total_pedidos, total_facturado, top_productos y
-        correo_enviado (todo serializable a JSON).
+        dict con fecha, hora_corte, conteos, total_facturado, top_productos
+        y correo_enviado (todo serializable a JSON).
     """
-    from datetime import timedelta
-
-    from django.db.models import Sum
+    from django.db.models import DecimalField, ExpressionWrapper, F, Sum
     from django.urls import reverse
 
     from configuracion.models import ConfiguracionERP
-    from ventas.models import Pedido
+    from ventas.models import DetalleVenta, Pedido, Venta
 
-    dia = timezone.localdate() - timedelta(days=1)
-    pedidos = Pedido.objects.filter(fecha_pedido__date=dia, estado='pagado')
+    ahora = timezone.localtime()
+    dia = ahora.date()
+    hora_corte = ahora.strftime('%H:%M')
+
+    # Tienda en línea: un pedido pagado sigue contando al enviarse/entregarse.
+    pedidos = Pedido.objects.filter(
+        fecha_pedido__date=dia, estado__in=ESTADOS_COBRADOS)
     total_pedidos = pedidos.count()
-    total_facturado = (pedidos.aggregate(t=Sum('total_pagado'))['t']
-                       or Decimal('0.00'))
-    top_productos = _top_productos_del_dia(dia, pedidos) if total_pedidos else []
+    total_online = (pedidos.aggregate(t=Sum('total_pagado'))['t']
+                    or Decimal('0.00'))
+
+    # Ventas internas (admin / módulo de ventas); las vacías no cuentan.
+    total_internas = (Venta.objects
+                      .filter(fecha__date=dia, detalles__isnull=False)
+                      .distinct().count())
+    monto_internas = (
+        DetalleVenta.objects.filter(venta__fecha__date=dia)
+        .aggregate(t=Sum(ExpressionWrapper(
+            F('cantidad') * F('precio_unitario'),
+            output_field=DecimalField(max_digits=12, decimal_places=2))))['t']
+        or Decimal('0.00'))
+
+    total_operaciones = total_pedidos + total_internas
+    total_facturado = total_online + monto_internas
+    top_productos = (_top_productos_del_dia(dia, pedidos)
+                     if total_operaciones else [])
 
     resultado = {
-        'fecha':           str(dia),
-        'total_pedidos':   total_pedidos,
-        'total_facturado': f'{total_facturado:.2f}',
-        'top_productos':   top_productos,
-        'correo_enviado':  False,
+        'fecha':             str(dia),
+        'hora_corte':        hora_corte,
+        'total_pedidos':     total_pedidos,
+        'total_internas':    total_internas,
+        'total_operaciones': total_operaciones,
+        'total_online':      f'{total_online:.2f}',
+        'monto_internas':    f'{monto_internas:.2f}',
+        'total_facturado':   f'{total_facturado:.2f}',
+        'top_productos':     top_productos,
+        'correo_enviado':    False,
     }
 
-    if not total_pedidos and not forzar:
-        logger.info('[Tarea reporte_diario] %s: sin ventas; no se envía '
-                    'correo.', dia)
+    if not total_operaciones and not forzar:
+        logger.info('[Tarea reporte_diario] %s %s: sin ventas hoy; no se '
+                    'envía correo.', dia, hora_corte)
         return resultado
     if not settings.ADMIN_EMAIL:
         logger.warning('[Tarea reporte_diario] ADMIN_EMAIL vacío; no se '
@@ -318,19 +344,18 @@ def reporte_ventas_diario(self, forzar: bool = False) -> dict:
     url_admin = (f"{settings.SITE_URL.rstrip('/')}"
                  f"{reverse('admin:ventas_pedido_changelist')}"
                  if settings.SITE_URL else '')
-    contexto = {
-        'fecha': fecha_txt, 'config': config, 'url_admin': url_admin,
-        'total_pedidos': total_pedidos,
-        'total_facturado': f'{total_facturado:.2f}',
-        'top_productos': top_productos,
-    }
+    contexto = dict(resultado, fecha=fecha_txt, config=config,
+                    url_admin=url_admin)
     lineas = [
         f"  {n}. {p['nombre']}: {p['unidades']} unidad(es), ${p['ingreso']}"
         for n, p in enumerate(top_productos, start=1)
     ]
     texto = (
-        f"Reporte de ventas del {fecha_txt} — {config.nombre_empresa}\n\n"
-        f"Pedidos pagados: {total_pedidos}\n"
+        f"Reporte de ventas del {fecha_txt} (corte a las {hora_corte}) — "
+        f"{config.nombre_empresa}\n\n"
+        f"Ventas del día: {total_operaciones}\n"
+        f"  Tienda en línea: {total_pedidos} pedido(s), ${total_online:.2f}\n"
+        f"  Ventas internas: {total_internas}, ${monto_internas:.2f}\n"
         f"Total facturado: ${total_facturado:.2f}\n\n"
         + ("Top productos:\n" + "\n".join(lineas) + "\n\n" if lineas else "")
         + (f"Panel de administración: {url_admin}\n" if url_admin else "")
@@ -338,7 +363,7 @@ def reporte_ventas_diario(self, forzar: bool = False) -> dict:
 
     try:
         send_mail(
-            subject=f'Reporte de ventas del {fecha_txt} — '
+            subject=f'Reporte de ventas del {fecha_txt} {hora_corte} — '
                     f'{config.nombre_empresa}',
             message=texto,
             from_email=settings.DEFAULT_FROM_EMAIL,
@@ -353,6 +378,7 @@ def reporte_ventas_diario(self, forzar: bool = False) -> dict:
         raise self.retry(exc=exc)
 
     resultado['correo_enviado'] = True
-    logger.info('[Tarea reporte_diario] Reporte de %s enviado (%s pedidos).',
-                dia, total_pedidos)
+    logger.info('[Tarea reporte_diario] Reporte de %s %s enviado (%s ventas, '
+                '$%s).', dia, hora_corte, total_operaciones,
+                resultado['total_facturado'])
     return resultado
